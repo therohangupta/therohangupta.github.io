@@ -5,7 +5,7 @@ date:   2024-07-15 0:0:0 +00:00
 categories: research
 image: /assets/images/index/contrast_sets.png
 categories: research
-authors: <b>Abrar Anwar*</b>, Rohan Gupta*, Jesse Thomason
+authors: Abrar Anwar*, <b>Rohan Gupta*</b>, Jesse Thomason
 venue: CoRL
 arxiv: https://arxiv.org/abs/2406.13636
 # paper: https://openreview.net/forum?id=7ZcePvChS7u
