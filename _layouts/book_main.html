@@ -1,0 +1,46 @@
+---
+layout: default
+---
+{% assign sorted-posts = site.books | sort: 'Finish Date' | reverse %}
+
+{% assign date_format = site.minima.date_format | default: "%b %-d, %Y" %}
+
+{% assign postsByYear = sorted-posts | group_by_exp:"post", "post['Finish Date'] | date: '%Y' " %}
+
+<h1>Books I Read Each Year</h1>
+
+{% for year in postsByYear %}
+  <h2>{{ year.name }}</h2>
+<pre><code>{% for post in year.items %} <a href="#{{post.Title}}">{{ post.Title }}</a> by {{post.Author}} ({{post['Finish Date'] | date: '%B'}})
+{% endfor %}</code></pre>
+{% endfor %}
+
+<h1>Book Reviews</h1>
+
+{% for year in postsByYear %}
+  <h1>{{ year.name }}</h1>
+
+
+    {% for post in year.items %}
+        
+        <div id="{{post.Title}}" style='margin:0 0 2em 0'>
+            <a href="{{post.url}}">
+            <img src="{{post.Cover}}" alt="post.Title" style="width:10em; float:left; margin-right: 2em;">
+            </a>
+
+            <h2 class="blog-title"><a href="{{ post.url }}">{{ post.Title }}</a></h2>
+
+            <p style="font-size: 14px; margin-top: 0; margin-bottom: 1em; line-height: .5em;"> 
+              By {{ post.Author }} 
+            </p>
+            <p style='font-size: 12px; margin-top: 0; margin-bottom: 0; line-height: .1em;'>
+              Date Finished: {{ post["Finish Date"] | date: date_format }}
+              </p>
+
+            <p>{{post.content}}</p>
+            <br clear="all" />
+        </div>  
+    {% endfor %}
+{% endfor %}
+
+    
