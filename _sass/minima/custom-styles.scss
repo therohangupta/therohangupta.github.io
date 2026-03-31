@@ -29,7 +29,7 @@
     /* background: #ffffff; */
   }
   .has-text-grey {
-    color: #C12636
+    color: #4d94ec;
   }
 
 
@@ -171,6 +171,79 @@
   ul li {
     padding: 3px 0px;
   }
+  
+  // Blog styles
+  .blog-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px 0;
+  }
+  
+  .blog-post-item {
+    margin-bottom: 40px;
+    padding-bottom: 30px;
+    border-bottom: 1px solid #e0e0e0;
+  }
+  
+  .blog-post-item:last-child {
+    border-bottom: none;
+  }
+  
+  .blog-post-header {
+    margin-bottom: 10px;
+  }
+  
+  .blog-title {
+    display: inline;
+    margin: 0;
+    padding: 0;
+    font-size: 24px;
+    font-weight: 600;
+  }
+  
+  .blog-title a {
+    color: #4287f5;
+    text-decoration: none;
+  }
+  
+  .blog-title a:hover {
+    color: #F0A63B;
+    border-bottom: 1px solid #F0A63B;
+  }
+  
+  .blog-date {
+    color: #7a7a7a;
+    font-size: 14px;
+    margin: 5px 0 10px 0;
+    padding: 0;
+  }
+  
+  .blog-categories {
+    margin: 10px 0;
+  }
+  
+  .blog-category-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    margin-right: 8px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #0c94c9;
+    background-color: #f0f8ff;
+    border: 1px solid #0c94c9;
+    border-radius: 12px;
+    text-transform: capitalize;
+  }
+  
+  .blog-excerpt,
+  .blog-subtitle {
+    color: #555;
+    font-size: 16px;
+    line-height: 1.6;
+    margin-top: 10px;
+  }
+  
   // Settled on moving the import of syntax highlighting to the bottom of the CSS
   // ... Otherwise it really bloats up the top of the CSS file and makes it difficult to find the start
   //@import "highlights";

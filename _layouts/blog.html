@@ -2,26 +2,66 @@
 layout: default
 ---
 
-{% for post in site.categories.posts %}
-<!-- <li> -->
-  {% assign date_format = site.minima.date_format | default: "%b %-d, %Y" %}
+<h1 align="center">blog</h1>
 
-  <p class='blog-date'>
-    {{ post.date | date: date_format }}
-
-    <!-- <nobr>
-    {% for tag in post.categories %}
-      {% capture tag_name %}{{ tag }}{% endcapture %}
-      <nobr>{{ tag_name }}</nobr>
+<div class="blog-container">
+  {% assign sorted_posts = site.posts | sort: 'date' | reverse %}
+  {% for post in sorted_posts %}
+    {% assign should_exclude = false %}
+    {% if post.path contains 'items/_posts' %}
+      {% assign should_exclude = true %}
+    {% endif %}
+    {% for category in post.categories %}
+      {% if category == 'jekyll' or category == 'update' or category == 'research' %}
+        {% assign should_exclude = true %}
+      {% endif %}
     {% endfor %}
-  </nobr> -->
-  </p>
-  <!-- <br> -->
-  <h2 class="blog-title"><a href="{{ post.url }}">{{ post.title }}</a></h2>
-
-  <p class="blog-subtitle">
-    {{ post.subtitle }}
-  </p>
+    {% unless should_exclude %}
+      <div class="blog-post-item">
+        <div class="blog-post-header">
+          <h2 class="blog-title"><a href="{{ post.url | relative_url }}">{{ post.title | escape }}</a></h2>
+          <p class="blog-date">
+            {% assign date_format = site.minima.date_format | default: "%b %-d, %Y" %}
+            {{ post.date | date: date_format }}
+          </p>
+        </div>
+        
+        {% if post.categories.size > 0 %}
+          <div class="blog-categories">
+            {% for category in post.categories %}
+              {% unless category == 'jekyll' or category == 'update' or category == 'research' %}
+                <span class="blog-category-badge">{{ category | replace: '-', ' ' }}</span>
+              {% endunless %}
+            {% endfor %}
+          </div>
+        {% endif %}
+        
+        {% if post.excerpt %}
+          <p class="blog-excerpt">{{ post.excerpt | strip_html | truncatewords: 50 }}</p>
+        {% elsif post.subtitle %}
+          <p class="blog-subtitle">{{ post.subtitle }}</p>
+        {% endif %}
+      </div>
+    {% endunless %}
+  {% endfor %}
   
-<!-- </li> -->
-{% endfor %}
+  {% assign blog_posts_count = 0 %}
+  {% for post in sorted_posts %}
+    {% assign should_exclude = false %}
+    {% if post.path contains 'items/_posts' %}
+      {% assign should_exclude = true %}
+    {% endif %}
+    {% for category in post.categories %}
+      {% if category == 'jekyll' or category == 'update' or category == 'research' %}
+        {% assign should_exclude = true %}
+      {% endif %}
+    {% endfor %}
+    {% unless should_exclude %}
+      {% assign blog_posts_count = blog_posts_count | plus: 1 %}
+    {% endunless %}
+  {% endfor %}
+  
+  {% if blog_posts_count == 0 %}
+    <p style="text-align: center; color: #7a7a7a; margin-top: 40px;">No blog posts yet. Check back soon!</p>
+  {% endif %}
+</div>

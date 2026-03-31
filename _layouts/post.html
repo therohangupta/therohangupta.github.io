@@ -44,7 +44,25 @@ layout: default
             <span class="p-author h-card" itemprop="name">{{ author }}</span></span>
             {%- if forloop.last == false %}, {% endif -%}
         {% endfor %}
-      {%- endif -%}</p>
+      {%- endif -%}
+    </p>
+    {%- if page.categories.size > 0 -%}
+      {%- assign has_valid_category = false -%}
+      {%- for category in page.categories -%}
+        {%- unless category == 'jekyll' or category == 'update' or category == 'research' -%}
+          {%- assign has_valid_category = true -%}
+        {%- endunless -%}
+      {%- endfor -%}
+      {%- if has_valid_category -%}
+        <div class="blog-categories" style="margin-top: 10px;">
+          {%- for category in page.categories -%}
+            {%- unless category == 'jekyll' or category == 'update' or category == 'research' -%}
+              <span class="blog-category-badge">{{ category | replace: '-', ' ' }}</span>
+            {%- endunless -%}
+          {%- endfor -%}
+        </div>
+      {%- endif -%}
+    {%- endif -%}
   </header>
 
   <div class="post-content e-content" itemprop="articleBody">
