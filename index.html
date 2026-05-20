@@ -1,225 +1,122 @@
 ---
-layout: 
+layout: default
 ---
-<!DOCTYPE HTML>
-<html lang="en">
 
+<section class="hero-panel">
+  <div class="hero-copy">
+    <h1>Rohan Gupta</h1>
 
+    <p>
+      Hi! I'm Rohan. I'm currently a <strong>Senior Machine Learning Engineer</strong>
+      at <strong>Synopsys</strong>, where I apply ML to chip design. I also
+      interned there and helped build intelligent <strong>LLM-based agents</strong>
+      for existing products and tools.
+    </p>
 
+    <p>
+      I completed my undergraduate and masters in <strong>Computer Science</strong> at the
+      <strong>University of Southern California</strong>, where I worked in the
+      <a href="https://glamor.rocks/" target="_blank" rel="noopener">GLAMOR Lab</a>
+      on <strong>multimodal AI</strong> and <strong>robotics</strong>, focusing
+      on <strong>policy evaluation</strong> and <strong>single</strong> and <strong>multi-robot planning
+      and learning</strong>.
+    </p>
 
-{%- include head.html -%}
-{%- include header.html -%}
+    <p>
+      During my time at USC, I received the merit-based
+      <strong>Presidential Scholarship</strong>
+      and won the
+      <a href="https://academicprograms.usc.edu/services/undergraduate-research-and-experiential-learning/usc-provosts-undergraduate-research-fellowships/" target="_blank" rel="noopener">Provost's Research Fellowship</a>
+      award for my work in GLAMOR. I continue to stay involved with the lab's
+      research efforts as an alumni. I also was part of a band.
+    </p>
 
-<div class="wrapper">
-<!-- <body> -->
+    <p>
+      Whether they're embodied or purely virtual, I hope to be part of building
+      the next wave of <strong>robust AI systems</strong> in my career.
+    </p>
+  </div>
 
+  <aside class="signal-card" aria-label="Profile links">
+    <div class="portrait-shell">
+      <img class="profile-portrait" alt="Rohan Gupta profile photo" src="{{ '/assets/images/index/linkedin.jpeg' | relative_url }}">
+    </div>
+    <div class="social-grid">
+      <a class="link_button" href="https://scholar.google.com/citations?user=ZHznhEsAAAAJ&hl=en" target="_blank" rel="noopener" aria-label="Google Scholar">
+        <i class="ai ai-google-scholar-square"></i>
+      </a>
+      <a class="link_button" href="mailto:rgupta11111@gmail.com" aria-label="Email">
+        <i class="fa fa-envelope" aria-hidden="true"></i>
+      </a>
+      <a class="link_button" href="https://github.com/therohangupta" target="_blank" rel="noopener" aria-label="GitHub">
+        <i class="fab fa-github"></i>
+      </a>
+      <a class="link_button" href="https://www.linkedin.com/in/rohan---gupta" target="_blank" rel="noopener" aria-label="LinkedIn">
+        <i class="fab fa-linkedin"></i>
+      </a>
+      <a class="link_button" href="https://twitter.com/_rohan_gupta" target="_blank" rel="noopener" aria-label="Twitter">
+        <i class="fab fa-twitter"></i>
+      </a>
+      <a class="link_button" href="{{ '/assets/research_cv_phd.pdf' | relative_url }}" target="_blank" rel="noopener" aria-label="CV">
+        <i class="ai ai-cv"></i>
+      </a>
+    </div>
+  </aside>
+</section>
 
+{%- include news.html -%}
 
-  <table style="width:100%;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;">
-    <tr style="padding:0px">
-      <td style="padding:0px">
-        <table style="width:100%;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;">
-          <tr style="padding:0px">
-            <td style="padding:0%;padding-right:3%; padding-top: 5%;width:66.5%;vertical-align:middle">
-              <!-- <h1 style="font-family:'Chakra Petch';font-weight: 800;">Abrar Anwar</h1>
-              <h1 style="font-family:'Righteous';font-weight: 200;">Abrar Anwar</h1>
-              <h1 style="font-family:'Russo One';font-weight: 100;">Abrar Anwar</h1> -->
-              <!-- <h1 style="font-weight: 600;">Abrar Anwar</h1> -->
+<section class="section-panel research-panel">
+  <div class="section-heading">
+    <p class="eyebrow">selected work</p>
+    <h2>Research</h2>
+  </div>
 
-              <p>
-                Hi! I'm Rohan. I'm currently a Senior Machine Learning Engineer at Synopsys, where I apply ML to chip design. I also interned there and helped build intelligent LLM-based agents for existing products and tools. 
-                I completed my undergraduate and masters in Computer Science at the University of Southern California, 
-                where I worked in the <a href="https://glamor.rocks/" target="_blank">GLAMOR Lab</a> 
-                on multimodal AI and robotics where I focused on policy evaluation and single and multi-robot planning and learning.</p>
+  {% assign research_items = site.categories.items | sort: "date" | reverse %}
+  {% assign postsByYear = research_items | group_by_exp:"post", "post.date | date: '%Y'" %}
 
-              <p>During my time at USC, I received the 
-                merit-based Presidential Scholarship and won the <a href="https://academicprograms.usc.edu/services/undergraduate-research-and-experiential-learning/usc-provosts-undergraduate-research-fellowships/" target="_blank">Provost's Research Fellowship</a> 
-                award for my work in GLAMOR. I continue to stay involved with the lab's research efforts as an alumni. I also was part of a band.</p>
+  {% for year in postsByYear %}
+    <div class="year-block">
+      <h3>{{ year.name }}</h3>
 
-              <p>Whether they're embodied or purely virtual, I hope to be part of building the next 
-                wave of robust AI systems in my career.</p>
-
-            <a style="border-bottom: none; color:#0c94c9;text-align: center;" href="mailto:rgupta11111@gmail.com" target="_blank">
-
-
-
-
-
-          
-              <!-- <p style="text-align:center">
-                <a class="button" target="_blank" href="mailto:abrar.anwar@usc.edu">email</a>
-                <a class="button" target="_blank" href="https://github.com/AbrarAnwar">github</a> 
-                <a class="button" target="_blank" href="https://www.linkedin.com/in/abraranwar"> linkedin </a> 
-                <br>
-                <a class="button" target="_blank" href="https://twitter.com/_abraranwar"> twitter </a>
-                <a class="button" target="_blank" href="https://scholar.google.com/citations?user=RlmDfzoAAAAJ&hl=en"> scholar </a>
-              </p> -->
-
-              
-            </td>
-            <!-- <td style="padding:0%;width:33%;max-width:33%"> -->
-              <td style="padding:0%;padding-right:0%; padding-left:1%; padding-top: 5%;width:33%;vertical-align:middle">
-
-
-
-              <table style="padding:0%;width:100%;max-width: 100%;text-align: center;">
-                <tr style="padding:0%">
-                  <td style="padding:0%; text-align: center;">
-                    <!-- <img style="width:100%;max-width:100%" alt="profile photo" src="/assets/images/index/profile_circle.png"> -->
-                    <img style="width:100%;max-width:100%;border-radius: 50%;" alt="profile photo" src="/assets/images/index/linkedin.jpeg">
-
-                  </td>
-                </tr>
-
-                <tr style="padding:0%;text-align: center;">
-
-                  <td style="padding:0%;text-align: center;width:100%;max-width: 100%;float:left;" >
-                    <div style="text-align:center"><a style="border-bottom: none; color:#0c94c9;text-align: center;" href="mailto:rgupta11111@gmail.com" target="_blank">rgupta11111 [at] gmail [dot] com</a></div>
-
-                    <p style="text-align:center; font-size:34px">
-                      <a class="link_button" style="border-bottom: none;" href="https://scholar.google.com/citations?user=ZHznhEsAAAAJ&hl=en" target="_blank">
-                        <i class="ai ai-google-scholar-square"></i>
-                      </a>
-        
-                      <!-- <a class="link_button" style="border-bottom: none;" href="mailto:abrar.anwar@usc.edu" target="_blank">
-                        <i class="fa fa-envelope" aria-hidden="true"></i>
-                      </a> -->
-        
-                      <a class="link_button" style="border-bottom: none;" href="https://github.com/therohangupta" target="_blank">
-                        <i class="fab fa-github"></i>
-                      </a>
-                      <a class="link_button" style="border-bottom: none;" href="https://www.linkedin.com/in/rohan---gupta" target="_blank">
-                        <i class="fab fa-linkedin"></i>
-                      </a>
-                      <a class="link_button" style="border-bottom: none;" href="https://twitter.com/_rohan_gupta" target="_blank">
-                        <i class="fab fa-twitter"></i>
-                      </a>
-                      <a class="link_button" style="border-bottom: none;"  href="{{ '/assets/research_cv_phd.pdf' | relative_url }}" target="_blank">
-                        <i class="ai ai-cv"></i>
-                      </a>
-                  </p>
-                  </td>
-
-                </tr>
-
-            </table>
-
-            </td>
-          </tr>
-        </table>
-
-
-        {%- include news.html -%}
-
-        <table style="width:100%;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;">
-          <tr>
-            <td style="padding:0%;width:100%;vertical-align:middle">
-              <h1 align="center">research</h1>
-              <!-- <p>
-                I'm interested in robotics, machine learning, neural networks, and computer vision.
-              </p> -->
-            </td>
-          </tr>
-        </table>
-        <table style="width:100%;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;">
-
-
-          {% assign postsByYear =
-            site.categories.items | group_by_exp:"post", "post.date | date: '%Y'" %}
-          
-
-          {% for year in postsByYear %}
-          <tr><td><h3>{{year.name}}</h3></td></tr>
-
-
-
-            {% for post in year.items %}
-
-
-            {% for cat in post.categories %}
-                {% if cat == 'research' %}
-              
-
-          <tr>
-            <td style="padding:0%;width:27.5%;vertical-align:middle;min-width:120px;">
-              <img src="{{post.image}}" alt="project image" style="height:auto; max-width:100%;" />
-            </td>
-            <td style="padding:1.5%;width:100%;vertical-align:middle;margin:auto">
-
-              <font style="font-size: 18px;"><b>{{post.title}}</b></font>
-              <br>
-
-              <font style="font-size: 14px;">{{post.authors}}</font>
-              <br>
-
-              <font style="font-size: 14px;" color="#7a7a7a">{{post.excerpt | remove: '<p>' | remove: '</p>'}}</font>
-              <br>
-              <br>
-
-
-              <!-- <br> -->
-              <font style="font-size: 14px;"><em>{{post.venue}}</em>, {{ post.date | date: "%Y" }} </font>
-              <br>
-
-              {% if post.paper %}
-              <a class="button" href="{{post.paper}}"><b>paper</b></a> 
-              {% endif %}
-              {% if post.arxiv %}
-              <a class="button" href="{{post.arxiv}}"><b>arxiv</b></a> 
-              {% endif %}
-              {% if post.tech_report %}
-              <a class="button" href="{{post.tech_report}}"><b>tech report</b></a> 
-              {% endif %}
-              {% if post.video %}
-              <a class="button" href="{{post.video}}"><b>video</b></a> 
-              {% endif %}
-              {% if post.code %}
-              <a class="button" href="{{post.code}}"><b>code</b></a> 
-              {% endif %}
-              {% if post.poster %}
-              <a class="button" href="{{post.poster}}"><b>poster</b></a> 
-              {% endif %}
-              {% if post.slides %}
-              <a class="button" href="{{post.slides}}"><b>slides</b></a> 
-              {% endif %}
-              {% if post.website %}
-              <a class="button" href="{{post.website}}"><b>website</b></a> 
-              {% endif %}
-              {% if post.blog %}
-              <a class="button" href="{{post.blog}}"><b>blog</b></a> 
-              {% endif %}
-              {% if post.twitter %}
-              <a class="button" href="{{post.twitter}}"><b>twitter</b></a> 
-              {% endif %}
-              {% if post.repo_badge %}
-              {{post.repo_badge}}
+      <div class="research-grid">
+        {% for post in year.items %}
+          {% if post.categories contains 'research' %}
+            <article class="research-card">
+              {% if post.image %}
+                <a class="research-image-link" href="{{ post.url | relative_url }}" aria-label="{{ post.title | escape }}">
+                  <img src="{{ post.image | relative_url }}" alt="{{ post.title | escape }} project image" loading="lazy">
+                </a>
               {% endif %}
 
-            </td>
-          </tr>
+              <div class="research-content">
+                <h4>{{ post.title }}</h4>
+                <p class="research-authors">{{ post.authors }}</p>
+                <p class="research-excerpt">{{ post.excerpt | strip_html }}</p>
+                <p class="research-venue"><em>{{ post.venue }}</em>, {{ post.date | date: "%Y" }}</p>
 
+                <div class="action-row">
+                  {% if post.paper %}<a class="button" href="{{ post.paper }}">paper</a>{% endif %}
+                  {% if post.arxiv %}<a class="button" href="{{ post.arxiv }}">arxiv</a>{% endif %}
+                  {% if post.tech_report %}<a class="button" href="{{ post.tech_report }}">tech report</a>{% endif %}
+                  {% if post.video %}<a class="button" href="{{ post.video }}">video</a>{% endif %}
+                  {% if post.code %}<a class="button" href="{{ post.code }}">code</a>{% endif %}
+                  {% if post.poster %}<a class="button" href="{{ post.poster }}">poster</a>{% endif %}
+                  {% if post.slides %}<a class="button" href="{{ post.slides }}">slides</a>{% endif %}
+                  {% if post.website %}<a class="button" href="{{ post.website }}">website</a>{% endif %}
+                  {% if post.blog %}<a class="button" href="{{ post.blog }}">blog</a>{% endif %}
+                  {% if post.twitter %}<a class="button" href="{{ post.twitter }}">twitter</a>{% endif %}
+                  {% if post.repo_badge %}{{ post.repo_badge }}{% endif %}
+                </div>
+              </div>
+            </article>
           {% endif %}
-          {% endfor %}
-          {% endfor %}
-          {% endfor %}
-        </table>
+        {% endfor %}
+      </div>
+    </div>
+  {% endfor %}
+</section>
 
-
-
-
-        <table style="width:100%;border:0px;border-spacing:0px;border-collapse:separate;margin-right:auto;margin-left:auto;">
-          <tr>
-            <td style="padding:0px">
-              <br>
-              <p style="text-align:center;font-size:small;">
-                Design and source code from <a style="font-size:small;" href="https://jonbarron.info">Jon Barron's website</a>
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-<!-- </body> -->
-</div>
-</html>
+<p class="design-credit">
+  Original academic-site inspiration from <a href="https://jonbarron.info" target="_blank" rel="noopener">Jon Barron's website</a>.
+</p>
