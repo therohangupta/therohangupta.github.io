@@ -75,7 +75,6 @@ So we'll start there.
 Before thinking about architectures or loss functions, it’s worth stepping back and asking a simpler question:
 
 > What problem is the model actually solving?
-
 {: .callout .callout-question}
 
 In machine learning, that problem is ultimately defined by **data**.
@@ -83,7 +82,6 @@ In machine learning, that problem is ultimately defined by **data**.
 More precisely:
 
 > The data defines the <span class="term" tabindex="0" data-tooltip="The pattern of examples the model is exposed to. In practice, this often defines the actual problem more than the model architecture does."><strong>distribution</strong></span> the model is trying to learn.
-
 {: .callout .callout-key}
 
 Everything else — the model, the loss, the training algorithm — is just a way of learning a high-dimensional function that fits to that distribution.
@@ -166,7 +164,6 @@ These transformations often redefine the learning problem itself.
 The core generative modeling problem remains:
 
 > learn a distribution over images.
-
 {: .callout .callout-example}
 
 But diffusion changes the form of the data the model sees during training:
@@ -212,7 +209,6 @@ Two systems trained on the same raw dataset can still learn very different behav
 
 A useful shift in perspective is this:
 > Many advances in ML are really changes to the data distribution disguised as algorithmic advances.
-
 {: .callout .callout-key}
 
 Many breakthroughs in ML are described as algorithmic:
@@ -224,7 +220,6 @@ Many breakthroughs in ML are described as algorithmic:
 But often, the real change is simpler:
 
 > The data distribution changed.
-
 {: .callout .callout-key}
 
 Some examples:
@@ -272,7 +267,6 @@ A more complete view is:
 
 > Data defines the problem.
 > The learning system defines how you solve it.
-
 {: .callout .callout-key}
 
 Keeping this separation in mind makes it much easier to reason about:
@@ -284,7 +278,6 @@ Keeping this separation in mind makes it much easier to reason about:
 With the problem defined by data, we can now look at the other half:
 
 > Given a data distribution, how do we design a system that can learn from it?
-
 {: .callout .callout-question}
 
 That’s where the core primitives of machine learning come in.
@@ -295,7 +288,6 @@ That’s where the core primitives of machine learning come in.
 Once the data defines the problem, the next question becomes:
 
 > How do we design a system that can learn from that distribution effectively?
-
 {: .callout .callout-question}
 
 This is where most of machine learning research lives.
@@ -352,7 +344,6 @@ The key shift is this:
 
 > Most ML progress is not random innovation.  
 > It is **systematic exploration of this design space**.
-
 {: .callout .callout-key}
 
 ---
@@ -364,19 +355,16 @@ The first primitive is representation.
 Representation answers the question:
 
 > What kinds of structure does the model naturally express?
-
 {: .callout .callout-question}
 
 A useful way to think about representation is not just:
 
 > What architecture is this?
-
 {: .callout .callout-question}
 
 but:
 
 > What computational structure does this architecture make natural?
-
 {: .callout .callout-question}
 
 This is the part of ML most people think about first:
@@ -405,13 +393,11 @@ In many cases, representation changes are changes in <span class="term" tabindex
 A useful way to think about representation is:
 
 > Representation defines the model’s <span class="term" tabindex="0" data-tooltip="The kinds of patterns a model naturally prefers or finds easy to represent before seeing any particular dataset.">inductive bias</span>.
-
 {: .callout .callout-key}
 
 Or more concretely:
 
 > What kinds of patterns are "cheap" for the model to represent?
-
 {: .callout .callout-question}
 
 CNNs make translation-invariant image features cheap.
@@ -429,7 +415,6 @@ This is why architecture changes can produce dramatic improvements even when eve
 One recurring pattern in ML representation is:
 
 > Local interactions → global interactions
-
 {: .callout .callout-pattern}
 
 You can see this progression clearly:
@@ -452,7 +437,6 @@ This dramatically improves:
 Notice something important here:
 
 > A representation change often affects optimization implicitly.
-
 {: .callout .callout-note}
 
 This coupling shows up constantly in ML.
@@ -473,12 +457,10 @@ Representation also includes:
 
 Even diffusion models can be partially understood as a representational shift:
 > generation becomes a trajectory through noise space rather than a direct mapping.
-
 {: .callout .callout-example}
 
 Mixture-of-Experts models are another example:
 > instead of representing computation as a single dense pathway, they represent it as sparse conditional routing through specialized subnetworks.
-
 {: .callout .callout-example}
 
 
@@ -497,7 +479,6 @@ Representation determines:
 And importantly:
 
 > representation choices often force changes elsewhere in the system.
-
 {: .callout .callout-key}
 
 You often cannot change representation in isolation.
@@ -514,7 +495,6 @@ Without those supporting changes, the representation would not scale effectively
 This is a recurring theme throughout the design space:
 
 > Primitives are conceptually distinct, but operationally coupled.
-
 {: .callout .callout-key}
 
 ---
@@ -524,7 +504,6 @@ This is a recurring theme throughout the design space:
 If representation defines the structure of computation, <span class="term" tabindex="0" data-tooltip="The choice of what parts of the system are fixed and what parts are allowed to be learned from data.">parameterization</span> defines:
 
 > What parts of that computation are fixed, and what parts are learned?
-
 {: .callout .callout-question}
 
 This is one of the deepest recurring patterns in modern ML.
@@ -532,7 +511,6 @@ This is one of the deepest recurring patterns in modern ML.
 A huge amount of progress can be summarized as:
 
 > Replace **fixed computation** with **learned computation**.
-
 {: .callout .callout-pattern}
 
 ---
@@ -551,7 +529,6 @@ Examples:
 Many innovations that initially appear mathematically sophisticated are, at a high level, versions of the same move:
 
 > Delegate more decisions to **optimization**.
-
 {: .callout .callout-pattern}
 
 If a useful heuristic can be expressed as parameters, ML systems tend to push it into the learned portion of the system.
@@ -569,7 +546,6 @@ Earlier sequence models often relied on:
 
 Attention changes this into:
 > learned interaction strengths between elements.
-
 {: .callout .callout-key}
 
 Instead of specifying which tokens should influence each other, the model learns relational structure dynamically from data.
@@ -584,7 +560,6 @@ LoRA (Low-Rank Adaptation) provides another useful example.
 
 LoRA does not fundamentally change the model architecture. Instead, it changes:
 > **where learning is allowed to occur.**
-
 {: .callout .callout-key}
 
 Rather than updating the full weight matrices during fine-tuning, LoRA constrains updates to a low-rank subspace.
@@ -622,7 +597,6 @@ But over time, people started making parts of normalization adaptive or learnabl
 This reflects a broader pattern:
 
 > Replace static heuristics with dynamically learned parameters.
-
 {: .callout .callout-pattern}
 
 The system increasingly learns not just the solution, but aspects of the optimization process itself.
@@ -644,7 +618,6 @@ Two systems may represent the same mathematical function class in theory, but be
 
 This is one reason ML often feels different from classical software engineering:
 > the way you parameterize a solution strongly affects whether gradient-based learning can actually find it.
-
 {: .callout .callout-key}
 
 ---
@@ -665,7 +638,6 @@ Two systems can represent similar function classes in theory while behaving very
 This is one of the biggest differences between ML systems and classical software systems:
 
 > the way you express a computation strongly affects whether gradient-based learning can actually discover it.
-
 {: .callout .callout-key}
 
 And more importantly, parameterization is deeply coupled to other primitives.
@@ -686,7 +658,6 @@ As more computation becomes learnable:
 
 Again:
 > the primitives often move together.
-
 {: .callout .callout-note}
 
 ---
@@ -696,7 +667,6 @@ Again:
 Once you define a representation and parameterization, the next question is:
 
 > What exactly is the model trying to optimize?
-
 {: .callout .callout-question}
 
 This is the objective.
@@ -712,13 +682,11 @@ Examples:
 
 At first glance, objectives seem straightforward:
 > define the thing you want.
-
 {: .callout .callout-key}
 
 But in practice, a large fraction of ML progress comes from something subtler:
 
 > Reshaping difficult problems into **objectives that are easier to optimize**.
-
 {: .callout .callout-key}
 
 ---
@@ -727,12 +695,10 @@ But in practice, a large fraction of ML progress comes from something subtler:
 
 The gap between:
 > what you want
-
 {: .callout .callout-question}
 
 and:
 > what you can optimize effectively
-
 {: .callout .callout-question}
 
 is where much of ML design lives.
@@ -753,7 +719,6 @@ Diffusion models are a striking example.
 
 The underlying problem is:
 > generative modeling over images.
-
 {: .callout .callout-example}
 
 Directly maximizing likelihood over high-dimensional data is difficult.
@@ -765,13 +730,11 @@ Diffusion reframes the task entirely:
 Instead of:
 
 > "generate an image"
-
 {: .callout .callout-example}
 
 the model learns:
 
 > "predict the noise added to an image."
-
 {: .callout .callout-example}
 
 The architecture changed somewhat and I'm sure will continue to change.
@@ -787,7 +750,6 @@ Flow matching provides another example of objective design in generative modelin
 Like diffusion, the underlying goal is still:
 
 > learn a data distribution.
-
 {: .callout .callout-example}
 
 And like diffusion, flow matching avoids treating generation as a single global mapping from noise to data.
@@ -803,7 +765,6 @@ Flow matching trains the model to predict the velocity field along a path from a
 So the optimized objective becomes:
 
 > predict how a sample should move at a point along the path between distributions.
-
 {: .callout .callout-example}
 
 That makes flow matching useful to view as a change along the **objective** primitive.
@@ -838,7 +799,6 @@ But the optimization surface becomes dramatically more stable.
 
 Conceptually:
 > the objective is reshaped into a form that is safer to optimize.
-
 {: .callout .callout-key}
 
 This pattern shows up constantly:
@@ -900,12 +860,10 @@ It is one part of a coupled learning process.
 
 If objectives answer:
 > "What should the model optimize?"
-
 {: .callout .callout-question}
 
 then <span class="term" tabindex="0" data-tooltip="Mechanisms that keep learning from going off the rails: clipping, normalization, trust regions, regularization, and similar stabilizers.">constraints</span> answer:
 > "What should the model avoid doing?"
-
 {: .callout .callout-question}
 
 The boundary between objectives and constraints can be blurry.
@@ -914,7 +872,6 @@ A rough distinction is:
 
 > objectives define what behavior the system is trying to produce.  
 > constraints shape which optimization paths or solutions are **allowed, discouraged, or stabilized**.
-
 {: .callout .callout-key}
 
 In practice, many mechanisms do both.
@@ -941,7 +898,6 @@ In reality, they often do substantive work:
 
 A large fraction of modern ML can be interpreted as:
 > unconstrained optimization made stable through **constraints**.
-
 {: .callout .callout-key}
 
 ---
@@ -950,7 +906,6 @@ A large fraction of modern ML can be interpreted as:
 A recurring pattern across ML is:
 
 > unconstrained optimization → constrained optimization
-
 {: .callout .callout-pattern}
 
 Early versions of many algorithms are theoretically valid but in practice are unstable.
@@ -1001,7 +956,6 @@ Examples include:
 These do not always look like constraints in the mathematical sense, but they often serve similar purposes:
 
 > preventing the system from entering unstable regions of behavior.
-
 {: .callout .callout-key}
 
 ---
@@ -1031,7 +985,6 @@ Residual connections, normalization layers, and attention scaling all partly fun
 Many algorithms that appear fundamentally different are actually:
 
 > different ways of constraining learning dynamics.
-
 {: .callout .callout-key}
 
 and many "new algorithms" are really constraint changes.
@@ -1040,7 +993,6 @@ This is one of the most compressive ways to interpret ML progress.
 
 A surprising number of methods reduce to:
 > changing what regions of behavior are allowed or encouraged.
-
 {: .callout .callout-key}
 
 This is especially visible in RL, but it appears across the field.
@@ -1070,13 +1022,11 @@ constraints become increasingly necessary.
 <span class="term" tabindex="0" data-tooltip="The problem of figuring out which earlier choices, parameters, or actions deserve credit or blame for an outcome.">Credit assignment</span> answers one of the hardest questions in learning:
 
 > Which parts of the system caused the outcome, and by how much?
-
 {: .callout .callout-question}
 
 Or more generally:
 
 > How does information about success or failure propagate through a learning system?
-
 {: .callout .callout-question}
 
 This primitive is slightly different from the others.
@@ -1091,7 +1041,6 @@ Representation, parameterization, objectives, and constraints describe component
 Credit assignment describes something more global:
 
 > whether useful learning signals can successfully **propagate through the system at all**.
-
 {: .callout .callout-key}
 
 In that sense, credit assignment is less a standalone module and more a property of the entire learning process.
@@ -1137,7 +1086,6 @@ Optimization and credit assignment are closely related, but they are not identic
 Optimization answers:
 
 > How are parameters updated?
-
 {: .callout .callout-question}
 
 Examples include:
@@ -1153,7 +1101,6 @@ These define how the system moves through parameter space.
 Credit assignment answers a different question:
 
 > Does useful information reliably reach the parameters that need updating?
-
 {: .callout .callout-question}
 
 Backpropagation sits at the intersection of both:
@@ -1164,7 +1111,6 @@ Backpropagation sits at the intersection of both:
 This distinction matters because many advances that appear optimization-related are actually:
 
 > improvements in attribution structure.
-
 {: .callout .callout-key}
 
 ---
@@ -1174,7 +1120,6 @@ This distinction matters because many advances that appear optimization-related 
 One recurring pattern across ML is:
 
 > long, sparse, opaque attribution paths → **shorter, denser, more structured attribution paths**
-
 {: .callout .callout-pattern}
 
 A surprising number of breakthroughs become easier to understand through this lens.
@@ -1211,7 +1156,6 @@ But one reason it succeeded so dramatically is because it also improved the syst
 This is a good example of how the primitives interact:
 
 > a representational change reshaped the learnability of the system.
-
 {: .callout .callout-key}
 
 ---
@@ -1226,7 +1170,6 @@ The reward may arrive much later.
 The system must determine:
 
 > which actions deserved credit for future outcomes.
-
 {: .callout .callout-question}
 
 This is difficult even conceptually, and even harder in practice when rewards are:
@@ -1248,7 +1191,6 @@ Replay buffers are a useful example.
 At one level, they are a data mechanism:
 
 > storing and resampling experience.
-
 {: .callout .callout-example}
 
 But one reason they matter is that they improve the quality and stability of <span class="term" tabindex="0" data-tooltip="Credit assignment across time: deciding which past actions mattered when the reward or failure shows up later.">temporal credit assignment</span> by decorrelating trajectories and reusing informative experiences.
@@ -1256,7 +1198,6 @@ But one reason they matter is that they improve the quality and stability of <sp
 Again:
 
 > the primitives are conceptually separable, but operationally entangled.
-
 {: .callout .callout-key}
 
 ---
@@ -1266,7 +1207,6 @@ Again:
 Another recurring pattern across ML is:
 
 > single-pass computation → iterative refinement
-
 {: .callout .callout-pattern}
 
 This appears in:
@@ -1300,13 +1240,11 @@ This makes the generative task easier to supervise because the model receives st
 One way to interpret chain-of-thought prompting is through the same lens:
 
 > intermediate reasoning steps create more structured attribution pathways through the computation.
-
 {: .callout .callout-key}
 
 Rather than forcing the model to map:
 
 > problem → answer
-
 {: .callout .callout-pattern}
 
 in one opaque jump, the reasoning process becomes decomposed into smaller intermediate stages.
@@ -1349,7 +1287,6 @@ But all of them also reshape how effectively learning signals propagate through 
 That is what makes credit assignment different from the other primitives:
 
 > it is less a category of components and more a **cross-cutting property of learnability** throughout the entire design space.
-
 {: .callout .callout-key}
 
 ---
@@ -1367,13 +1304,11 @@ But that is exactly why the framework is useful.
 Instead of asking:
 
 > What is the trick?
-
 {: .callout .callout-question}
 
 you can ask:
 
 > What changed in the design space?
-
 {: .callout .callout-question}
 
 Did the data distribution change?
@@ -1413,5 +1348,4 @@ That is the lens I have found most useful so far:
 > data defines the problem,  
 > learning systems define the solution,  
 > and progress often comes from moving through a small set of recurring design primitives.
-
 {: .callout .callout-key}
