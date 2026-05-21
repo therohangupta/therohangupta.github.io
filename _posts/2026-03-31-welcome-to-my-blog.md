@@ -3,6 +3,8 @@ layout: post
 title: "Welcome to My Blog"
 date: 2026-03-31 10:00:00 -0800
 categories: general
+image: /assets/images/blog/welcome-to-my-blog-title.png
+image_alt: "Minimal abstract title image for Welcome to My Blog"
 ---
 
 Welcome! This is my personal blog where I'll be writing about anything that piques my interest in AI, machine learning, and robotics. If you're here, you're probably curious about similar topics, and I'm glad you stumbled upon my blog!

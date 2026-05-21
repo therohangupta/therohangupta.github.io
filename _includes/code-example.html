@@ -1,0 +1,13 @@
+<section class="code-example">
+  <div class="code-example-header">
+    <h2>{{ include.title }}</h2>
+    <div class="code-example-actions">
+      <button class="copy-code-button" type="button">copy</button>
+      <a href="{{ include.path }}">raw</a>
+    </div>
+  </div>
+  {%- capture example_code -%}{% include_relative {{ include.path }} %}{%- endcapture -%}
+  <div class="code-example-body">
+    <pre><code class="language-{{ include.language | default: 'text' }}">{{ example_code | strip | escape }}</code></pre>
+  </div>
+</section>

@@ -3,6 +3,8 @@ layout: post
 title: "Navigating the Machine Learning Design Space: Understanding the Primitives Behind the Progress"
 date: 2026-05-15 10:00:00 -0800
 categories: general
+image: /assets/images/blog/machine-learning-design-space-title.png
+image_alt: "Minimal abstract title image for the machine learning design space"
 ---
 
 My first year as an ML Engineer is almost complete, and one of the biggest shifts in how I understand the field has been learning to see machine learning less as a stream of disconnected methods and more as a <span class="term" tabindex="0" data-tooltip="A way of seeing ML methods as choices along a few recurring axes, instead of as disconnected tricks."><strong>design space</strong></span>.

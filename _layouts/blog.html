@@ -17,31 +17,39 @@ layout: default
       {% endif %}
     {% endfor %}
     {% unless should_exclude %}
-      <div class="blog-post-item">
-        <div class="blog-post-header">
-          <h2 class="blog-title"><a href="{{ post.url | relative_url }}">{{ post.title | escape }}</a></h2>
-          <p class="blog-date">
-            {% assign date_format = site.minima.date_format | default: "%b %-d, %Y" %}
-            {{ post.date | date: date_format }}
-          </p>
-        </div>
-        
-        {% if post.categories.size > 0 %}
-          <div class="blog-categories">
-            {% for category in post.categories %}
-              {% unless category == 'jekyll' or category == 'update' or category == 'research' %}
-                <span class="blog-category-badge">{{ category | replace: '-', ' ' }}</span>
-              {% endunless %}
-            {% endfor %}
+      <article class="blog-post-item">
+        <a class="blog-card-link" href="{{ post.url | relative_url }}" aria-label="{{ post.title | escape }}">
+          {% if post.image %}
+            <img class="blog-card-image" src="{{ post.image | relative_url }}" alt="{{ post.image_alt | default: post.title | escape }}" loading="lazy">
+          {% endif %}
+
+          <div class="blog-card-body">
+            <div class="blog-post-header">
+              <h2 class="blog-title">{{ post.title | escape }}</h2>
+              <p class="blog-date">
+                {% assign date_format = site.minima.date_format | default: "%b %-d, %Y" %}
+                {{ post.date | date: date_format }}
+              </p>
+            </div>
+
+            {% if post.categories.size > 0 %}
+              <div class="blog-categories">
+                {% for category in post.categories %}
+                  {% unless category == 'jekyll' or category == 'update' or category == 'research' %}
+                    <span class="blog-category-badge">{{ category | replace: '-', ' ' }}</span>
+                  {% endunless %}
+                {% endfor %}
+              </div>
+            {% endif %}
+
+            {% if post.excerpt %}
+              <p class="blog-excerpt">{{ post.excerpt | strip_html | truncatewords: 28 }}</p>
+            {% elsif post.subtitle %}
+              <p class="blog-subtitle">{{ post.subtitle }}</p>
+            {% endif %}
           </div>
-        {% endif %}
-        
-        {% if post.excerpt %}
-          <p class="blog-excerpt">{{ post.excerpt | strip_html | truncatewords: 50 }}</p>
-        {% elsif post.subtitle %}
-          <p class="blog-subtitle">{{ post.subtitle }}</p>
-        {% endif %}
-      </div>
+        </a>
+      </article>
     {% endunless %}
   {% endfor %}
   

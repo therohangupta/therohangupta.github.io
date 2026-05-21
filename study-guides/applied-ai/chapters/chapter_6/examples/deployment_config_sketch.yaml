@@ -1,0 +1,108 @@
+# Deployment config sketch for an LLM inference service.
+# This is intentionally minimal and omits cluster-specific details such as
+# secrets, ingress, storage classes, and GPU device plugin configuration.
+# Production notes:
+# - Use canary or shadow traffic before shifting all users to a new modelVersion.
+# - Keep the previous deployment warm for rollback when evals or latency regress.
+# - Export traces, queue depth, tokens/sec, p95 latency, GPU memory, and error rate.
+# - GPU replicas are expensive; autoscaling should consider both latency SLOs and cost.
+# - Backpressure should reject or queue safely instead of OOMing the worker.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-inference
+  labels:
+    app: llm-inference
+    model: example-model
+    modelVersion: v3
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: llm-inference
+  template:
+    metadata:
+      labels:
+        app: llm-inference
+        model: example-model
+        modelVersion: v3
+    spec:
+      nodeSelector:
+        accelerator: nvidia-gpu
+      containers:
+        - name: server
+          image: example.com/llm-inference:v3
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MODEL_ID
+              value: example-model-v3
+            - name: MAX_BATCH_TOKENS
+              value: "8192"
+            - name: MAX_SEQUENCE_LENGTH
+              value: "4096"
+            - name: ENABLE_TRACING
+              value: "true"
+            - name: MAX_QUEUE_DEPTH
+              value: "128"
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              memory: 48Gi
+            requests:
+              nvidia.com/gpu: "1"
+              memory: 48Gi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-inference
+spec:
+  selector:
+    app: llm-inference
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+
+---
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: llm-inference
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-inference
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: inference_queue_depth
+        target:
+          type: AverageValue
+          averageValue: "20"
