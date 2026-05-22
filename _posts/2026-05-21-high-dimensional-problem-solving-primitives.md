@@ -3,6 +3,8 @@ layout: post
 title: "A Framework for High-Dimensional Problem Solving"
 date: 2026-05-21 10:00:00 -0800
 categories: general
+image: /assets/images/blog/high-dim-problem-solving-framework.png
+image_alt: "Minimal abstract title image for the high dimensional framework"
 ---
 
 I have spent the last few years moving between robotics and EDA: two engineering worlds that should not feel similar, at first glance.
