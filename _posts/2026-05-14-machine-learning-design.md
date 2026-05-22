@@ -38,6 +38,8 @@ The goal isn't to explain every method in detail. There are much better resource
 
 And just to be clear: this is not the only way to think about ML. It's simply a framework that has helped me organize the field in my own head, and I think it may be useful to others too, especially those starting out learning about it.
 
+**Note**: I used AI while writing this, because it is 2026 and refusing good tools is not a personality trait. The ideas, structure, edits, and final judgment are mine; AI helped me explore, pressure-test, and sharpen the writing.
+
 ## Table of Contents
 
 - Table of Contents
