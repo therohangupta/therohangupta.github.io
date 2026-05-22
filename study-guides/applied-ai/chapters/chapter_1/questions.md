@@ -145,7 +145,9 @@ These questions explicitly connect Chapter 1 back to the primitives in Chapter 0
 
 ### Sample Answer
 
-Prompting changes the input x, which changes the conditional distribution P(y|x). Even though weights are fixed, the model was trained to condition strongly on context, so modifying the prompt effectively shifts the probability mass toward different outputs. This is equivalent to changing the optimization target at inference time without retraining.
+Prompting changes the input $x$, which changes the conditional distribution $P(y\mid x)$.  
+Even though weights are fixed, the model was trained to condition strongly on context, so modifying the prompt effectively shifts the probability mass toward different outputs.  
+This is equivalent to changing the optimization target at inference time without retraining.
 
 ---
 
