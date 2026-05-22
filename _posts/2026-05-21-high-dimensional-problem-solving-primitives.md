@@ -69,28 +69,11 @@ Within that scope, the framework can be stress-tested beyond robotics and chips 
 
 The organized version of the framework looks like this:
 
-```text
-Problem Definition
-  - Representation
-  - Evaluation
-        |
-        v
-Search / Proposal Dynamics
-  - Follow
-  - Expand
-  - Sample
-        |
-        v
-Persistence + Complexity Management
-  - Memory
-  - Amortization
-  - Relaxation
-  - Decomposition
-        |
-        v
-Composition
-  - Hybridization
-```
+* **Problem definition**: representation and evaluation.
+* **Search / proposal dynamics**: follow, expand, and sample.
+* **Persistence**: memory and amortization.
+* **Complexity management**: relaxation and decomposition.
+* **Composition**: hybridization.
 
 Many things that initially look like separate algorithmic categories are better understood as interactions between these layers. Heuristics, dynamic programming, learned priors, deep learning, etc. are not all independent primitives. They emerge from how systems represent problems, propose moves, remember structure, decompose complexity, and reuse work across instances.
 
