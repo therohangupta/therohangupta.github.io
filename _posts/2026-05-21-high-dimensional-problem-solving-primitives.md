@@ -1,13 +1,13 @@
 ---
 layout: post
-title: "A Framework for High-Dimensional Problem Solving"
+title: "A Framework for Navigating High-Dimensional Problem Spaces"
 date: 2026-05-21 10:00:00 -0800
 categories: general
 image: /assets/images/blog/high-dim-problem-solving-framework.png
-image_alt: "Minimal abstract title image for the high dimensional framework"
+image_alt: "Minimal abstract title image for the high-dimensional problem spaces framework"
 ---
 
-I have spent the last few years moving between robotics and EDA: two engineering worlds that should not feel similar, at first glance.
+I have spent the last few years moving between **robotics** and **EDA**: two engineering worlds that should not feel similar, at first glance.
 
 In robotics research, I worked on vision-and-language navigation, robot policy evaluation, imitation learning, diffusion-style policies, and multi-robot planning systems. The problems were physical and embodied: robots had to move through rooms, coordinate with each other, interpret language, avoid failures, and turn high-level goals into executable behavior.
 
@@ -25,7 +25,7 @@ In robotics, many methods seemed to fall into a few recurring behaviors. Some **
 
 Then I started seeing the same behaviors in EDA. Analytical placement and timing optimization followed local structure. Routing graphs, maze routing, and rip-up-and-reroute expanded through reachable physical connectivity. Simulated annealing, randomized refinement, and other stochastic methods sampled possible layouts or transformations and biased the search toward better regions.
 
-The domains were different, but the computational moves were the same.
+The domains were different, but the **computational moves** were the same.
 
 At first, this looks like an analogy between two fields.
 
@@ -53,7 +53,7 @@ Robotics and chip design are the main case studies because they are the places w
 
 ## The Argument in One Page
 
-The post moves through five levels to build a framework for high-dimensional problem solving.
+The post moves through **five levels** to build a framework for high-dimensional problem solving.
 
 First, robotics and chip design look strangely similar despite having different objects, tools, and vocabularies.
 
@@ -63,7 +63,7 @@ Third, many algorithms become instances of a smaller set of **proposal dynamics*
 
 Fourth, those proposal dynamics sit inside a larger framework that includes **representation**, **evaluation**, **memory**, **relaxation**, **decomposition**, **amortization**, and **hybridization**.
 
-The scope is important: this framework is for systems that must navigate large constrained possibility spaces where exhaustive enumeration or direct closed-form computation is infeasible. It is not a theory of all computation, all intelligence, or all engineering.
+The scope is important: this framework is for systems that must navigate **large constrained possibility spaces** where exhaustive enumeration or direct closed-form computation is infeasible. It is not a theory of all computation, all intelligence, or all engineering.
 
 Within that scope, the framework can be stress-tested beyond robotics and chips using SAT solvers, dynamic programming, graph search, Monte Carlo tree search, and language models.
 
@@ -75,9 +75,11 @@ The organized version of the framework looks like this:
 * **Complexity management**: relaxation and decomposition.
 * **Composition**: hybridization.
 
+![A framework diagram for high-dimensional problem solving, showing problem definition, search and proposal dynamics, persistence and complexity management, and composition.](/assets/images/blog/high-dim-problem-solving-framework.png)
+
 Many things that initially look like separate algorithmic categories are better understood as interactions between these layers. Heuristics, dynamic programming, learned priors, deep learning, etc. are not all independent primitives. They emerge from how systems represent problems, propose moves, remember structure, decompose complexity, and reuse work across instances.
 
-This describes the regime where many possibilities exist, validity matters, objectives compete, evaluation is costly, and useful structure has to be preserved across time.
+This is the regime of **search pressure**: many possibilities, hard constraints, expensive evaluation, limited compute, incomplete structure, and useful information that has to be preserved across time.
 
 ---
 
@@ -85,51 +87,17 @@ This describes the regime where many possibilities exist, validity matters, obje
 
 The first conceptual shift is to stop thinking in terms of **domains** and start thinking in terms of **spaces**.
 
-A robot trajectory is a point in a space of possible trajectories.
-
-A grasp is a point in a space of possible grasps.
-
-A multi-robot task allocation is a point in a space of possible assignments, schedules, and execution plans.
-
-A chip placement is a point in a space of possible layouts.
-
-A routing topology is a point in a space of possible physical connections.
-
-A SAT assignment is a point in a Boolean assignment space.
-
-A dynamic-programming subproblem is a point in a decomposed state space.
-
-A generated sentence is a trajectory through a combinatorial sequence space.
+A robot trajectory is a point in a space of possible trajectories. A grasp is a point in a space of possible grasps. A chip placement is a point in a space of possible layouts. A routing topology is a point in a space of possible physical connections. A SAT assignment is a point in a Boolean assignment space. A generated sentence is a trajectory through a combinatorial sequence space.
 
 This framing does not erase domain knowledge. Domain knowledge is still everything. A robot is not a chip, a timing path is not a manipulator arm, and a routing guide is not a proof search. But the space-based view lets us ask a more general question:
 
 > What does a system need in order to move intelligently through a space too large to enumerate?
 
-At minimum, it needs a few things.
+At minimum, it needs **representation**, **evaluation**, **proposal dynamics**, **memory**, **relaxation**, **decomposition**, and often **amortization**: memory whose usefulness persists across problem instances rather than only within a single solve.
 
-It needs a **representation** of candidate solutions.
-
-It needs an **evaluation mechanism** that distinguishes valid from invalid and better from worse.
-
-It needs **proposal dynamics**: ways of generating or modifying candidates.
-
-It needs **memory** so that useful work persists within a solve.
-
-It often needs **relaxation**, because the exact problem is too discrete, discontinuous, or expensive to optimize directly.
-
-It often needs **decomposition**, because the full problem is too large to solve monolithically.
-
-And increasingly, it uses **amortization**: memory whose usefulness persists across problem instances rather than only within a single solve.
-
-The mistake is to treat individual algorithms as isolated inventions.
+The mistake is to treat individual algorithms as **isolated inventions**.
 
 RRTs, gradient descent, SAT solvers, dynamic programming, transformers, simulated annealing, and model predictive controllers are not just separate techniques scattered across fields. They are combinations of recurring components.
-
-**Proposal dynamics are not the whole system.** They are movement behaviors operating inside larger systems.
-
-**Amortization is cross-instance memory** in this picture. A cached DP table, a learned clause database, a trained neural network, and a reusable roadmap are different mechanisms, but they all answer a similar question: how can work from the past make the next solve cheaper?
-
-**Hybridization is different.** It is not another primitive. It is what happens when these pieces are composed into a working system.
 
 That distinction keeps the framework from turning into a list of algorithm names. The article is not trying to classify every method into one bucket. It is trying to identify the roles that methods play inside larger problem-solving systems.
 
@@ -139,7 +107,7 @@ That distinction keeps the framework from turning into a list of algorithm names
 
 The boundary matters.
 
-This framework is not trying to describe every computation. Some systems do not need to navigate a large possibility space at all.
+This framework is not trying to describe **every computation**. Some systems do not need to navigate a large possibility space at all.
 
 Matrix multiplication, FFTs, modular arithmetic, simple hash-table lookup, deterministic finite-state protocols, and straightforward regex execution are not natural examples of this framework. They may be important computations, but their execution path is largely direct, predetermined, or addressed by structure. There is no meaningful proposal dynamic, no broad exploration, and no search pressure in the sense this post cares about.
 
@@ -150,7 +118,7 @@ The counterexamples are useful because they reveal the real scope:
 > This framework describes systems under **search pressure**: many possibilities, hard constraints, expensive evaluation, limited compute, and no direct closed-form route to the answer.
 
 
-When enough exploitable structure exists, search can collapse into direct computation. Linear algebra is often easier than SAT not because the objects are smaller, but because the structure is stronger. Gaussian elimination, FFTs, sorting networks, and some convex optimization problems show the opposite regime: the problem may be large, but the path through it is structured enough that broad exploration becomes unnecessary.
+When enough **exploitable structure** exists, search can collapse into **direct computation**. Linear algebra is often easier than SAT not because the objects are smaller, but because the structure is stronger. Gaussian elimination, FFTs, sorting networks, and some convex optimization problems show the opposite regime: the problem may be large, but the path through it is structured enough that broad exploration becomes unnecessary.
 
 That is the boundary. This framework is about the regime where structure is useful but incomplete, so systems must navigate.
 
@@ -180,7 +148,7 @@ The domains are different, but the **problem shape** is similar:
 
 This is why the same computational behaviors keep returning. When a problem has the same shape, it creates similar pressure on the methods used to solve it.
 
-The pressure is not caused by robotics specifically. It is not caused by chip design specifically. It is caused by high-dimensional constrained search.
+The pressure is not caused by robotics specifically. It is not caused by chip design specifically. It is caused by **high-dimensional constrained search**.
 
 ---
 
@@ -192,27 +160,27 @@ Suppose a robot needs to pick up an object from a cluttered table and place it o
 
 The framework appears immediately:
 
-* Representation: RGB-D observations, object detections, a map of free space, the robot's joint state, a candidate grasp pose, and a trajectory parameterization.
-* Evaluation: collision checks, grasp reachability, object stability, joint limits, torque limits, task success, and safety.
-* Proposal dynamics: sampled grasps, inverse kinematics, trajectory optimization, local replanning, graph search, or a learned policy that proposes an action chunk.
-* Memory: a search tree, a cached map, a learned policy, a database of successful grasps, or the current belief about the scene.
-* Relaxation: smoothed collision costs, simplified dynamics, approximate contact models, or continuous trajectory parameters.
-* Decomposition: perception, grasp selection, motion planning, control, monitoring, and recovery.
-* Amortization: learned grasp proposals or action distributions trained from previous experience.
+* **Representation**: observations, object detections, free space, joint state, candidate grasps, and trajectory parameters.
+* **Evaluation**: collision checks, grasp reachability, object stability, joint limits, task success, and safety.
+* **Proposal dynamics**: sampled grasps, inverse kinematics, trajectory optimization, graph search, local replanning, or a learned policy.
+* **Memory**: the current belief state, a search tree, a cached map, or a database of successful grasps.
+* **Relaxation**: smoothed collision costs, simplified dynamics, and approximate contact models.
+* **Decomposition**: perception, grasp selection, motion planning, control, monitoring, and recovery.
+* **Amortization**: learned grasp or action models that reuse experience from previous tasks.
 
 Now suppose an EDA tool needs to produce a better physical implementation of part of a chip.
 
 The same pattern appears again:
 
-* Representation: netlists, cell features, net connectivity, timing paths, placement coordinates, density maps, routing resources, and quality-of-results metrics.
-* Evaluation: legality, timing, congestion, wirelength, power, area, and downstream tool behavior.
-* Proposal dynamics: cell moves, differentiable placement updates, buffering changes, routing decisions, randomized perturbations, or learned predictions about which regions deserve attention.
-* Memory: the current design state, optimization history, timing graphs, congestion maps, learned embeddings, or model parameters trained across previous designs.
-* Relaxation: continuous placement objectives, differentiable wirelength approximations, softened density constraints, or estimated congestion.
-* Decomposition: synthesis, floorplanning, placement, routing, timing analysis, signoff, and repair loops.
-* Amortization: learned models that use prior design data to guide future optimization.
+* **Representation**: netlists, cell features, timing paths, placement coordinates, density maps, and routing resources.
+* **Evaluation**: legality, timing, congestion, wirelength, power, area, and downstream tool behavior.
+* **Proposal dynamics**: cell moves, differentiable placement updates, buffering changes, routing decisions, randomized perturbations, or learned predictions about which regions deserve attention.
+* **Memory**: design state, optimization history, timing graphs, congestion maps, embeddings, and model parameters trained across previous designs.
+* **Relaxation**: continuous placement objectives, differentiable wirelength approximations, softened density constraints, and estimated congestion.
+* **Decomposition**: synthesis, floorplanning, placement, routing, timing analysis, signoff, and repair loops.
+* **Amortization**: learned models that use prior design data to guide future optimization.
 
-These are not the same engineering problem.
+These are not the same **engineering problem**.
 
 But the checklist is eerily similar:
 
@@ -286,7 +254,7 @@ In chip design, constraints include design-rule correctness, timing closure, rou
 
 In SAT, the constraint is literal: a complete assignment either satisfies the formula or it does not. In language generation, constraints may be softer or more contextual: syntax, formatting, tool-call schemas, factual consistency, or instruction following. In dynamic programming, constraints are often baked into the recurrence: which subproblems exist, which transitions are allowed, and what base cases are valid.
 
-Objectives rank candidates inside the feasible region.
+**Objectives rank** candidates inside the feasible region.
 
 In robotics, objectives might include smoothness, speed, energy efficiency, robustness, task success, comfort, information gain, or coordination quality. In chip design, objectives might include wirelength, area, power, timing slack, congestion, thermal behavior, and downstream quality-of-results. In language generation, objectives might include likelihood, helpfulness, correctness, style, coherence, or tool success.
 
@@ -300,7 +268,7 @@ This is where high-dimensional problem solving becomes more than "optimize a los
 
 Real systems have webs of validity checks, proxy metrics, downstream consequences, and tradeoffs. Some are differentiable. Some are discrete. Some are expensive. Some are only known after another tool, verifier, simulator, compiler, or physical experiment runs.
 
-That matters because every proposal method is only as good as the evaluation signal it receives.
+That matters because every proposal method is only as good as the **evaluation signal** it receives.
 
 If the evaluation is too weak, the system optimizes the wrong thing.
 
@@ -332,17 +300,21 @@ Once a system has representation and evaluation, it needs ways to propose candid
 
 This is where many familiar algorithms live.
 
-At a high level, I think many methods are built from **three recurring proposal dynamics**:
+At the level of proposal dynamics, many systems under search pressure appear to reduce to **three recurring movement behaviors**:
 
 * follow
 * expand
 * sample
 
-These are not the only kinds of algorithms. They are not mutually exclusive. Real systems mix them constantly. But they describe recurring ways systems traverse configuration spaces.
+These are not the only important components in high-dimensional problem solving. Systems also rely on **representation**, **evaluation**, **memory**, **decomposition**, **relaxation**, **amortization**, and **hybridization**.
+
+But as **proposal/search dynamics** specifically, these three behaviors appear to span the dominant ways systems move through configuration spaces.
+
+They are not mutually exclusive. Real systems constantly combine them. A single algorithm may follow locally while expanding globally, or sample broadly while using learned guidance to bias exploration.
 
 Learning can influence all three proposal dynamics. It can propose candidates, rank candidates, warm-start local refinement, bias sampling distributions, or decide where expansion should focus. I will treat it later under persistence, because learning's deeper role in this framework is to store useful structure from previous optimization so future search becomes cheaper.
 
-The proposal dynamics are **the movement behaviors**. Learning changes how those movements are guided.
+The claim is not that every algorithm fits neatly into one bucket. The claim is that under search pressure, these three movement behaviors recur surprisingly often: **local propagation/refinement**, **reachability/frontier growth**, and **probabilistic exploration**.
 
 The key distinction is:
 
@@ -385,7 +357,7 @@ They do not, by themselves, explore an enormous space.
 
 ### Expand
 
-To **expand** is to build connectivity through reachable regions.
+To **expand** is to build **connectivity** through reachable regions.
 
 The system asks a different question:
 
@@ -403,7 +375,7 @@ Expansion methods are not primarily asking what is best at first. They are askin
 
 Sometimes **feasibility is the hard part**. If the feasible region is fragmented, narrow, or hidden, gradient-like improvement may be useless. You need to discover a path before you can optimize it.
 
-The failure mode is also clear: coverage explodes.
+The failure mode is also clear: **coverage explodes**.
 
 A graph that is manageable in two dimensions becomes huge in twenty. A search tree that works in a small puzzle may become impossible in a large proof. A routing problem becomes difficult when millions of connections compete for limited physical channels. A planner can drown in its branching factor.
 
@@ -411,7 +383,7 @@ Expand methods accumulate reachability, but reachability can be expensive to map
 
 ### Sample
 
-To **sample** is to generate possibilities probabilistically and bias future search toward promising regions.
+To **sample** is to generate possibilities **probabilistically** and bias future search toward promising regions.
 
 The system does not need a smooth gradient or a complete map. It needs a way to create variation and a way to score the results.
 
@@ -439,13 +411,13 @@ That is both the strength and the danger.
 
 If the hill is good, CEM improves quickly. If the hill is merely the first decent thing it found, the distribution may **collapse too early**.
 
-The failure mode is premature convergence.
+The failure mode is **premature convergence**.
 
 ---
 
 ## Continuous and Combinatorial Spaces
 
-The `follow / expand / sample` framing is easiest to see in continuous optimization, but it is not limited to continuous spaces.
+The `follow / expand / sample` framing is easiest to see in **continuous optimization**, but it is not limited to continuous spaces.
 
 Continuous spaces have **local geometry**. Small moves often mean something. Gradients, Jacobians, linearizations, smooth costs, and local approximations can be useful.
 
@@ -455,7 +427,7 @@ Combinatorial spaces are different. They have **branching, weak locality, discre
 
 At first, symbolic systems can feel fundamentally different from robotics and EDA optimization.
 
-But the same proposal dynamics still appear.
+But the same **proposal dynamics** still appear.
 
 Unit propagation follows implications.
 
@@ -477,13 +449,13 @@ The constructed object is **the path through the space**.
 
 ## Stress Testing the Framework
 
-If the framework only worked for robotics and EDA, it would be a useful analogy. The more interesting question is whether it survives contact with systems that look very different.
+If the framework only worked for robotics and EDA, it would be a useful analogy. The more interesting question is whether it survives contact with systems that look **very different**.
 
 Here are a few quick stress tests.
 
 ### Dynamic Programming
 
-Dynamic programming is useful because it initially seems hard to place in the framework.
+Dynamic programming is useful because it initially seems **hard to place** in the framework.
 
 It is not primarily exploration in the RRT sense. It is not stochastic sampling. It is not simply gradient-like optimization. It is dominated by decomposition and reuse.
 
@@ -503,7 +475,7 @@ Together, they create reuse.
 
 ### SAT Solvers
 
-SAT solvers are another powerful stress test.
+SAT solvers are another **powerful stress test**.
 
 A modern SAT solver combines several framework components:
 
@@ -520,7 +492,7 @@ The solver searches a huge constrained space. It expands possible assignments, f
 
 ### Breadth-First Search
 
-Breadth-first search is a deliberately simple stress test.
+Breadth-first search is a deliberately **simple stress test**.
 
 It is mostly `Expand`: maintain a frontier, visit reachable states layer by layer, and remember what has already been seen. Its power comes from complete coverage under a simple representation. Its weakness is also obvious: if the branching factor is large, the frontier explodes.
 
@@ -534,13 +506,13 @@ That makes it a `Follow` method in the broader sense: local value propagation. T
 
 ### Monte Carlo Tree Search
 
-Monte Carlo tree search is a hybrid stress test.
+Monte Carlo tree search is a **hybrid stress test**.
 
 It expands a search tree, samples rollouts, evaluates outcomes, and remembers statistics on visited nodes. In learned systems like AlphaZero-style agents, a model also supplies priors and value estimates. That makes MCTS a compact example of `Expand`, `Sample`, `Evaluation`, `Memory`, and `Amortization` working together.
 
 ### Language Models
 
-Language models stress-test the same question from another direction.
+Language models stress-test the same question from **another direction**.
 
 At inference time, an LLM is moving through a sequence space one token, tool call, or generated action at a time. The **next-token distribution** is a proposal mechanism learned from training. Sampling changes how broadly the model explores possible continuations. The **context window** is short-term memory. The **trained weights** are long-term amortized memory. Tool calls expand the system beyond pure sequence generation into external state. Tests, retrieval, execution results, and human feedback provide evaluation signals.
 
@@ -566,7 +538,7 @@ It is also:
 
 Proposal dynamics describe **how a method moves**. Memory describes **what it keeps**.
 
-This distinction is subtle but important.
+This distinction is **subtle but important**.
 
 Two methods can both improve candidates over time while remembering very different things. And what a method remembers determines what kind of progress can compound.
 
@@ -607,7 +579,7 @@ The table is useful because **it makes predictions**.
 
 If a system keeps failing in the same way, ask **what it is failing to remember**. A local optimizer that keeps rediscovering the same bad basin may need population memory or restart structure. A planner that repeatedly explores the same infeasible corridor may need a better map, constraint cache, or learned cost. A SAT solver without learned clauses wastes work by revisiting conflicts. A robot policy that forgets uncertainty may act confidently outside its training distribution.
 
-The table also suggests hybrids.
+The table also suggests **hybrids**.
 
 If `Expand` gives you reachability but not prioritization, add learned guidance or sampling. If `Sample` gives you diversity but not legality, add a verifier or repair step. If `Follow` gives you refinement but needs a good initialization, add amortized warm starts. If learned parameters give you fast guesses but weak guarantees, wrap them in classical checks.
 
@@ -623,7 +595,7 @@ A learned model may remember experience across many previous problems. A planner
 
 ## Relaxation: Making Hard Problems Navigable
 
-Many real problems are discrete, combinatorial, non-convex, non-differentiable, or all of the above.
+Many real problems are **discrete**, **combinatorial**, **non-convex**, **non-differentiable**, or all of the above.
 
 Yet many of our best tools want smoothness.
 
@@ -631,7 +603,7 @@ They want gradients. They want continuity. They want local geometry. They want a
 
 **Relaxation is the art of turning a hard problem into a softer one.**
 
-This is one of the most important hidden moves in engineering.
+This is one of the most important **hidden moves in engineering**.
 
 In robotics, we linearize dynamics. We smooth collision costs. We approximate contact. We optimize trajectories with continuous parameters even when the actual task involves discrete events. We plan over simplified models before executing in the real world. We replace a hard feasibility problem with a penalty that can be optimized.
 
@@ -665,9 +637,9 @@ In mature systems, relaxations are usually paired with correction mechanisms. Co
 
 ## Decomposition: Surviving Scale Through Hierarchy
 
-Large high-dimensional problems are rarely solved all at once.
+Large high-dimensional problems are rarely solved **all at once**.
 
-They are decomposed.
+They are **decomposed**.
 
 This is not just software organization. It is a computational survival strategy.
 
@@ -683,7 +655,7 @@ Symbolic systems decompose too. Dynamic programming decomposes into subproblems.
 
 The important point is that decomposition changes the problem.
 
-It creates interfaces.
+It creates **interfaces**.
 
 Each stage passes a representation to the next stage. Each stage optimizes proxies for downstream success. Each stage makes assumptions about what later stages can repair. Each stage hides some detail and exposes other detail.
 
@@ -704,7 +676,7 @@ A language agent may produce a plausible plan that fails when an actual tool is 
 
 This is not a bug in decomposition. **It is the cost of decomposition.**
 
-This is why feedback loops matter.
+This is why **feedback loops** matter.
 
 Real pipelines are rarely one-way. They iterate. They repair. They rip up and reroute. They replan after execution failure. They use downstream signals to adjust upstream decisions.
 
@@ -732,7 +704,7 @@ This is why decomposition is not just a scaling trick. It is **a bet about which
 
 ## Learning and Amortization: Optimization Reused Across Instances
 
-Learning deserves its own section because it is easy to misunderstand what it contributes.
+Learning deserves its own section because it is easy to misunderstand **what it contributes**.
 
 The naive view is:
 
@@ -751,7 +723,7 @@ So the better framing is:
 > Classical methods perform online optimization. Learning performs offline optimization that can be reused.
 
 
-This is why learning becomes attractive when a domain has repeated structure.
+This is why learning becomes attractive when a domain has **repeated structure**.
 
 Robots encounter many related states, tasks, objects, and environments. Chip design tools process many designs, many blocks, many netlists, many timing paths, and many optimization histories. Language models train over enormous corpora of sequences and learn reusable statistical structure about continuation, syntax, semantics, and tool-like patterns.
 
@@ -772,51 +744,13 @@ If every instance is completely unique, learning has little to reuse. If the tra
 
 This is where ML in engineering differs from ML in demos.
 
-In real systems, the learned model is rarely the entire solution. It is usually **a component inside a larger loop**. It predicts, initializes, ranks, proposes, filters, summarizes, or guides. Then classical tools check, optimize, repair, and verify.
+In real systems, the learned model is rarely the entire solution. It is usually **a component inside a larger loop**. It predicts, initializes, ranks, proposes, filters, summarizes, or guides. Then classical tools **check, optimize, repair, and verify**.
 
 That is not a weakness of learning. It is the natural role of learning in high-stakes constrained systems.
 
-Learning is often best at "where to look."
+This is the historical pattern across robotics and EDA too. Both fields started with explicit models, analytical methods, and handcrafted structure. Then scale pushed them toward heuristics, sampling, decomposition, stochastic search, and approximation. Learning entered not as a replacement for optimization, but as another way to move optimization across time: expensive training creates reusable guidance for future solves.
 
-Classical methods are often best at "what is valid."
-
-The deepest systems use both.
-
----
-
-## Historical Convergence Across Robotics and EDA
-
-The similarity between robotics and chip design is not just a coincidence of modern ML.
-
-Both fields have gone through a similar broad evolution.
-
-Early systems leaned heavily on explicit models, analytical methods, and handcrafted structure.
-
-In robotics, this meant kinematics, dynamics, geometry, control theory, optimal control, and carefully engineered planners. In chip design, this meant analytical placement, explicit timing models, handcrafted heuristics, and optimization procedures designed around domain knowledge.
-
-This was not primitive or naive. Explicit structure is powerful. When the problem is small enough or the assumptions are clean enough, model-based methods can be extraordinarily effective.
-
-Then scale and complexity pushed both fields toward approximation.
-
-Robots moved into cluttered, uncertain, partially observable, contact-rich environments. They needed to handle language, perception, long-horizon tasks, and real-world messiness. Chips became larger, denser, more constrained, and more expensive to optimize exactly. The number of interacting decisions exploded.
-
-Both fields adopted heuristics, sampling, decomposition, and stochastic search.
-
-Exactness gave way to tractability.
-
-Then learning entered not as a replacement for optimization, but as another layer in the framework.
-
-Robotics began using learned perception, learned policies, learned dynamics, learned rewards, learned value functions, and learned proposal distributions. Chip design began using learned congestion predictors, timing estimators, placement guidance, netlist embeddings, graph neural networks, and now LLM-style interfaces and agents around tools.
-
-But the important lesson is:
-
-> Machine learning did not replace optimization. It changed where optimization happens.
-
-Some optimization now happens during training. Some expensive evaluations are approximated by learned surrogates. Some search spaces are navigated with learned priors. Some human tool knowledge is exposed through agents. Some initial guesses come from models instead of handcrafted heuristics.
-
-The old methods did not disappear.
-
-They became part of **hybrid systems**.
+The old methods did not disappear. They became parts of larger hybrid systems.
 
 ---
 
@@ -824,15 +758,7 @@ They became part of **hybrid systems**.
 
 The most capable systems are **rarely pure**.
 
-They do not only follow gradients.
-
-They do not only expand graphs.
-
-They do not only sample.
-
-They do not only learn.
-
-They combine methods because each component solves one part of the problem and fails somewhere else.
+They combine methods because each component solves one part of the problem and fails somewhere else. A hybrid system is not an aesthetic compromise. It is a way of **matching different assumptions to different bottlenecks**.
 
 A robot system may use a learned policy for fast action, a task planner for long-horizon structure, a motion planner for feasibility, a controller for tracking, a simulator for data generation, and an evaluator for measuring policy reliability. In a multi-robot system, an LLM or symbolic planner may propose a task decomposition, while lower-level planners and robot APIs determine what can actually be executed.
 
@@ -840,33 +766,15 @@ A chip design pipeline may use analytical placement, learned congestion predicti
 
 A SAT solver combines branching, propagation, conflict analysis, clause learning, and restarts. A modern language agent may combine an LLM, retrieval, code execution, tool calls, scratchpads, tests, and human feedback.
 
-This hybridization flows in two directions.
-
-### Classical Methods Guide Learning
+This hybridization flows in two directions: classical methods ground learning, and learning helps classical methods spend compute better.
 
 Classical methods provide structure, supervision, constraints, and data.
 
-In robotics, planners and controllers can generate demonstrations. Simulators can produce trajectories. Kinematics can constrain policy outputs. Model predictive control can provide a strong teacher. Domain structure can reduce the amount of data needed for learning.
-
-In chip design, classical tools generate enormous traces of decisions, metrics, and outcomes. Placers, routers, timing analyzers, and optimization engines create data that can supervise learned predictors. Analytical losses can shape training. Design rules can constrain model outputs.
-
-In symbolic systems, SAT solvers and theorem provers can generate traces, proofs, conflicts, and supervision for learned heuristics.
-
-Classical methods keep learning grounded.
-
-They narrow the search space. They encode hard-won domain knowledge. They prevent models from wasting probability mass on impossible regions.
-
-### Learning Guides Classical Methods
+Planners, controllers, simulators, placers, routers, timing analyzers, SAT solvers, theorem provers, and execution environments all generate traces, constraints, demonstrations, failures, and verification signals. They keep learning grounded by narrowing the search space and preventing models from wasting probability mass on impossible regions.
 
 Learning provides priors, approximations, rankings, and warm starts.
 
-In robotics, a learned model can suggest promising actions, predict dynamics, score candidate plans, initialize trajectory optimization, or decide which real-world experiments are most informative. In policy evaluation, learned uncertainty or active selection can reduce the cost of testing every possible task condition.
-
-In chip design, a learned model can predict congestion before routing, estimate timing before expensive analysis, initialize placement, rank transformations, detect likely problem regions, or provide embeddings that help downstream optimizers.
-
-In symbolic systems, learned models can guide branching, rank proof steps, select premises, propose lemmas, or prioritize search.
-
-Learning helps the classical system **spend compute where it matters**.
+It can suggest promising actions, predict dynamics, score plans, initialize trajectory optimization, predict congestion, estimate timing, rank transformations, guide branching, select premises, or prioritize search. Learning helps the classical system **spend compute where it matters**.
 
 This is the line I keep returning to:
 
@@ -882,7 +790,7 @@ The modern pattern is not **learning versus optimization**.
 
 It is **learning inside optimization**.
 
-This also makes the framework more actionable. The right hybrid depends on which part of the system is expensive or unreliable:
+This is where the framework becomes a design tool. The right hybrid depends on which part of the system is expensive, unreliable, or poorly matched to its assumptions:
 
 * If local geometry is meaningful, use `Follow` methods to refine quickly.
 * If feasibility is the bottleneck, use `Expand` methods to build reachable structure.
@@ -902,21 +810,17 @@ Every method carries assumptions.
 
 Failures are what happen when those assumptions stop being true.
 
-Follow methods assume local structure is useful. When the landscape is deceptive, they get trapped in local minima, follow bad gradients, propagate misleading values, or overfit to a relaxation.
+The obvious failures are easy to name. `Follow` gets trapped when **local structure lies**. `Expand` explodes when **coverage becomes too expensive**. `Sample` collapses when **selection pressure is wrong**. Memory becomes harmful when the retained structure stops being relevant.
 
-Expand methods assume feasible connectivity can be discovered at reasonable cost. When the space is too large, narrow, or high-dimensional, coverage becomes expensive.
+The more interesting failures happen at the **interfaces between framework components**.
 
-Sample methods assume evaluation and selection can gradually move probability mass toward better regions. When selection pressure is wrong, they converge too early, waste compute, or collapse diversity.
+**Proxy mismatch** happens when evaluation is cheap but dishonest. A robot trajectory optimizes a smooth collision penalty and still fails under exact geometry. A placer optimizes wirelength and creates routing congestion. A language model optimizes fluency and loses truth.
 
-Relaxations assume the softened problem preserves enough of the true problem. When the relaxation is too loose, the system optimizes an illusion.
+**Relaxation debt** happens when the softened problem stops preserving the structure of the real one. The relaxation gives the system gradients, but those gradients point through a world that only approximately exists.
 
-Decompositions assume upstream and downstream stages are aligned. When the interfaces are bad, one stage creates problems another stage cannot repair.
+**Decomposition debt** happens when an upstream stage hides information the downstream stage actually needed. A task planner creates a physically impossible plan. A placer creates timing or routing failures. A language agent creates a textual plan that collapses when tools are called.
 
-Memory assumes the retained structure will remain useful. When the environment, design family, objective, or formula distribution changes, cached structure can become misleading.
-
-Amortization assumes future instances resemble past data. When the distribution shifts, learned systems extrapolate poorly.
-
-Evaluation assumes the metrics capture what matters. When the metric is a proxy, the system may exploit it.
+**Distribution shift** happens when memory or amortization outlives the conditions that made it useful. A cached map becomes stale. A learned clause database stops helping on a different formula family. A model trained on one design family, robot platform, or prompt distribution confidently guides search in the wrong direction.
 
 This is why engineering judgment matters.
 
@@ -952,7 +856,7 @@ These are better questions than simply asking whether the method is "AI" or "cla
 
 ## Beyond Robotics and Chips
 
-Robotics and chip design are the examples I know best from direct experience. SAT solvers, dynamic programming, and language models are the stronger **stress tests** in this essay because they are concrete computational systems with recognizable representations, proposal dynamics, evaluation rules, and memory structures.
+Robotics and chip design are the examples I know best from direct experience. SAT solvers, dynamic programming, and language models are the stronger **stress tests** in this essay because they are concrete computational systems with recognizable **representations**, **proposal dynamics**, **evaluation rules**, and **memory structures**.
 
 **That is enough generalization for one post.**
 
@@ -964,39 +868,11 @@ It would be easy to overclaim here.
 
 I do not think this framework explains intelligence by itself. I do not think every system is secretly the same. The details matter enormously. A contact-rich robot manipulation problem, a chip routing problem, a theorem-proving problem, and an evolutionary process are not interchangeable.
 
-But they may be pressured by the same kind of computational bottleneck.
-
-The more modest claim is enough:
+But they may be pressured by the same kind of computational bottleneck. The more modest claim is enough:
 
 > Whenever a system must efficiently navigate a massive constrained space, the same pressures tend to reappear.
 
-It needs a way to represent candidates, judge them, propose changes, and retain useful structure. When the space becomes too hard to search directly, it often needs to soften the problem, split it into stages, reuse previous optimization work, and combine multiple imperfect methods.
-
-That recurrence is the interesting thing.
-
----
-
-## Different Domains, Same Framework
-
-Robotics and chip design are not the same.
-
-SAT solving, dynamic programming, graph search, Monte Carlo tree search, and language modeling are not the same either.
-
-Their objects are different. Their constraints are different. Their tools are different. Their cultures are different. Their failure cases are different.
-
-But within the scope of this essay, they repeatedly point toward a similar computational framework because they face a similar underlying challenge.
-
-They must navigate spaces too large to enumerate.
-
-They must satisfy constraints that are not optional.
-
-They must optimize objectives that conflict.
-
-They must use approximations without being fooled by them.
-
-They must decompose problems without losing the dependencies between stages.
-
-They must decide what to learn, what to search, what to verify, and what to remember.
+Within that scope, the pattern is sharp. These systems must navigate **spaces too large to enumerate**, satisfy **constraints that are not optional**, optimize **objectives that conflict**, use **approximations without being fooled by them**, decompose problems without losing the dependencies between stages, and decide what to learn, what to search, what to verify, and what to remember.
 
 That is why the same moves keep showing up:
 
