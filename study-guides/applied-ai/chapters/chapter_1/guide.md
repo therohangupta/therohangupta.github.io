@@ -30,11 +30,11 @@ The interview angle here is usually not "can you recite prompt tips." It is:
 
 Treat an LLM as a conditional distribution:
 
-P(y | x)
+$$P(y \mid x)$$
 
 LLM engineering is the art of controlling:
 
-* x, the input context
+* $$x$$, the input context
 * the allowed output space
 * the sequence of actions over time
 * the feedback loop that improves the system

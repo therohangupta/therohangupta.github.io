@@ -627,8 +627,33 @@ details.news-archive summary {
   color: #e8dcc4;
 }
 
+.post-content .highlighter-rouge,
+.post-content .highlight {
+  border-radius: var(--radius-md);
+  background: #0d0d0d;
+}
+
+.post-content .highlight {
+  overflow-x: auto;
+}
+
 .post-content pre {
   border-radius: var(--radius-md);
+  line-height: 1.55;
+}
+
+.post-content pre code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  white-space: pre;
+}
+
+.post-content .language-text pre code span {
+  color: inherit;
+  background: transparent;
 }
 
 .code-example {
