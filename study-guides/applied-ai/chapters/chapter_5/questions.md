@@ -262,3 +262,43 @@ Raw user feedback is noisy and biased. Users may rate style instead of correctne
 The reward may be incomplete. A system optimizing clicks, short-term satisfaction, or task completion may learn to avoid hard cases, over-escalate, become too verbose, or exploit UI behavior. In production, the reward must be constrained by safety, quality, fairness, latency, and long-term user trust metrics.
 
 ---
+
+## Question 26
+
+**What is PEFT, and why is it useful for post-training?**
+
+### Sample Answer
+
+Parameter-efficient fine-tuning adapts a model by training a small number of parameters while keeping most or all of the base model frozen. It is useful because full fine-tuning is expensive in GPU memory, optimizer state, checkpoint size, and regression risk. PEFT constrains the update, making targeted adaptation cheaper and often safer for narrow domains or behaviors. It still needs eval gates because even small updates can overfit, damage safety behavior, or fail outside the target slice.
+
+---
+
+## Question 27
+
+**What is LoRA's core idea?**
+
+### Sample Answer
+
+LoRA represents a weight update as a low-rank decomposition. Instead of updating a full weight matrix $W$, it freezes $W$ and trains small matrices whose product approximates the update: $\Delta W = AB$. The practical mental model is: frozen base weights plus small trainable low-rank adapters. This reduces trainable parameters and optimizer memory while still allowing the model's behavior to shift.
+
+---
+
+## Question 28
+
+**When would you use LoRA instead of full fine-tuning?**
+
+### Sample Answer
+
+I would use LoRA when the base model is already capable and I need a targeted adaptation, such as domain tone, formatting, tool-call behavior, or customer-specific behavior. It is attractive when GPU memory, training time, or deployment size matter. I would prefer full fine-tuning when the desired change is broad, the base model lacks the capability, or the adaptation needs deeper changes than a small low-rank update can express.
+
+---
+
+## Question 29
+
+**What are the risks of LoRA or adapter-based tuning?**
+
+### Sample Answer
+
+The adapter can overfit a narrow dataset, improve the target task while hurting general behavior, or weaken safety behavior in slices not covered by evals. Deployment can also fail if the adapter is paired with the wrong base model, tokenizer, config, or quantization setup. A LoRA adapter should be tracked with its base model, data version, training config, and eval results.
+
+---

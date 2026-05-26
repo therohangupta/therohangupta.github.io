@@ -230,3 +230,55 @@ I would define route classes based on difficulty, user tier, risk, latency targe
 ### Sample Answer
 
 I would compare token counts, output lengths, retry rates, agent step counts, cache hit rate, route mix, model versions, prompt versions, fallback frequency, and abuse patterns before and after the change. Flat request volume does not mean flat work. A prompt change, bad cache key, router regression, longer retrieved context, or retry storm can all multiply model work without increasing traffic.
+
+---
+
+## Question 23
+
+**How would you debug model drift in production?**
+
+### Sample Answer
+
+I would first separate data drift, concept drift, and system regressions. Then I would compare current traffic to the training and previous production distributions using feature statistics, embedding distributions, input slices, labels or delayed outcomes, and model confidence. I would inspect whether a prompt, model version, retrieval index, upstream schema, or user population changed. The fix might be recalibration, retraining, routing, updated eval coverage, better monitoring by slice, or rollback if the drift came from a bad release.
+
+---
+
+## Question 24
+
+**How would you serve an LLM to millions of users?**
+
+### Sample Answer
+
+I would design it as a routed, observable inference platform rather than one giant model endpoint. The system needs an API gateway, authentication, quotas, prompt construction, model routing, caching where safe, request batching, streaming responses, autoscaled inference workers, and fallbacks for overload or provider failure. I would optimize for tokens per second, time to first token, time to final token, GPU memory, KV-cache pressure, and cost per successful task. At large scale, the key controls are batching, admission control, model tiering, cache strategy, regional capacity, observability, and gradual rollouts.
+
+---
+
+## Question 25
+
+**What is the difference between prefill and decode in LLM serving?**
+
+### Sample Answer
+
+Prefill processes the input prompt and builds the initial KV cache, so it often drives time to first token. Decode generates new tokens one at a time using the KV cache, so it often drives time to final token and tokens per second. Prefill is usually more compute-heavy over prompt tokens, while decode is often memory-bandwidth-heavy because each step reads weights and cached K/V state.
+
+---
+
+## Question 26
+
+**How do chunked prefill, prefix caching, and PagedAttention improve LLM serving?**
+
+### Sample Answer
+
+Chunked prefill splits long prompt processing into smaller pieces so one long prompt does not monopolize the GPU. Prefix caching reuses cached K/V state for repeated prompt prefixes such as system prompts or templates. PagedAttention stores KV cache in fixed-size blocks to reduce memory fragmentation and support variable-length concurrent requests. They target different bottlenecks: scheduling fairness, repeated prefill work, and KV-cache memory management.
+
+---
+
+## Question 27
+
+**When would disaggregated prefill and decode be useful?**
+
+### Sample Answer
+
+It is useful when prefill and decode have different resource needs or interfere with each other under mixed traffic. Prefill workers can be optimized for compute-heavy prompt processing, while decode workers can be optimized for memory-bandwidth-heavy token generation. The benefit is independent scaling and less interference; the cost is more complex scheduling, KV-cache transfer, and new failure modes.
+
+---

@@ -238,6 +238,210 @@ For LLMs, the inference service must handle prefill, decode, KV cache, batching,
 
 An interview answer should distinguish between a generic web server and an inference server. The web server handles HTTP. The inference server handles GPU scheduling and model execution.
 
+### Prefill vs Decode
+
+LLM inference has two different phases.
+
+**Prefill** is the stage where the model reads the input prompt.
+
+```text
+prompt tokens -> forward pass -> initial KV cache
+```
+
+Prefill determines much of **time to first token**. It is relatively compute-heavy because the full prompt is available and can be processed in parallel.
+
+**Decode** is the stage where the model generates new tokens one at a time.
+
+```text
+previous tokens + KV cache -> next token -> append to KV cache
+```
+
+Decode determines much of **time to final token**. It is sequential and often memory-bandwidth-heavy because each step reads model weights and cached attention state.
+
+This distinction matters because the two phases stress hardware differently:
+
+| Phase | Main pressure | User-facing metric |
+| ----- | ------------- | ------------------ |
+| Prefill | compute over prompt tokens | time to first token |
+| Decode | memory bandwidth and KV-cache reads | tokens per second / time to final token |
+
+### KV Cache Mechanics
+
+During autoregressive decoding, future tokens need old keys and values.
+
+They do not need old queries.
+
+Mental model:
+
+```text
+for each new token:
+  compute Q_t, K_t, V_t
+  append K_t and V_t to cache
+  attend Q_t over cached K/V
+```
+
+Without a KV cache, every new token would recompute K and V for all previous tokens. With a KV cache, each token's K/V is computed once and reused.
+
+The cache grows with:
+
+* number of layers,
+* sequence length,
+* batch size / active requests,
+* number of KV heads,
+* head dimension,
+* precision.
+
+This is why long-context serving becomes a memory problem even when the model weights fit on the GPU.
+
+### Chunked Prefill
+
+Long prompts can monopolize GPU compute during prefill.
+
+Chunked prefill breaks a long prompt into smaller chunks so the serving engine can interleave prefill work with decode work from other requests.
+
+Mental model:
+
+```text
+one huge prefill
+  -> blocks other requests
+
+chunked prefill
+  -> process prompt in pieces
+  -> interleave with decode
+```
+
+The benefit is better latency fairness. The cost is more scheduling complexity.
+
+### Prefix Caching
+
+Many prompts share prefixes:
+
+* system prompts,
+* tool instructions,
+* few-shot examples,
+* policy text,
+* repeated templates.
+
+Prefix caching reuses the KV cache for identical prompt prefixes.
+
+Mental model:
+
+```text
+shared prefix -> cached K/V -> skip repeated prefill work
+```
+
+This can improve time to first token and reduce compute, but the cache key must include correctness-relevant dimensions:
+
+* model version,
+* tokenizer,
+* prompt text,
+* system/developer instructions,
+* tenant or permission scope when relevant.
+
+### PagedAttention / Paged KV Cache
+
+Naive KV cache allocation wants contiguous memory per request.
+
+That is inefficient because requests:
+
+* have different prompt lengths,
+* generate different numbers of tokens,
+* finish at different times,
+* grow dynamically.
+
+PagedAttention treats KV cache memory more like operating-system paging:
+
+```text
+logical token sequence
+  -> fixed-size physical KV blocks
+```
+
+This reduces fragmentation and lets memory from finished requests be reused more flexibly.
+
+### Continuous Batching
+
+Static batching groups a fixed set of requests together.
+
+The problem:
+
+```text
+some requests finish early
+  -> empty slots remain
+  -> GPU utilization drops
+```
+
+Continuous batching treats the active batch as a changing pool. As requests finish, new requests enter.
+
+This keeps the GPU busier and is one reason modern LLM serving engines can achieve much higher throughput than naive batching.
+
+### KV Cache Quantization
+
+Quantization stores values in lower precision.
+
+For a real value $x$, a simple quantization mental model is:
+
+```text
+real value -> scale and integer code -> approximate real value
+```
+
+KV cache quantization reduces VRAM and memory bandwidth pressure during decode.
+
+Tradeoff:
+
+* lower memory use,
+* better throughput or concurrency,
+* possible quality degradation,
+* more implementation complexity.
+
+### Speculative Decoding
+
+Speculative decoding uses a smaller draft model to propose tokens and a larger target model to verify them.
+
+Mental model:
+
+```text
+draft model proposes several tokens
+  -> target model checks them in parallel
+  -> accepted tokens are emitted
+  -> rejected tokens are corrected
+```
+
+The goal is to reduce the number of slow sequential target-model decode steps.
+
+It works best when:
+
+* the draft model is much faster,
+* the draft model's tokens are often accepted,
+* decode is the bottleneck,
+* orchestration overhead is low.
+
+### Disaggregated Prefill and Decode
+
+Prefill and decode have different resource profiles.
+
+Disaggregated serving runs them on separate pools:
+
+```text
+prefill workers: compute-heavy prompt processing
+decode workers: memory-bandwidth-heavy token generation
+```
+
+Benefits:
+
+* scale prefill and decode independently,
+* reduce interference between long prompts and generation,
+* tune hardware or scheduling per phase.
+
+Cost:
+
+* KV cache transfer between pools,
+* more complex scheduling,
+* more failure modes.
+
+Interview framing:
+
+> I would reason about LLM serving by separating prefill and decode. Prefill is prompt processing and initial KV-cache construction; decode is sequential token generation and KV-cache reading. Optimizations like chunked prefill, prefix caching, PagedAttention, continuous batching, KV quantization, speculative decoding, and disaggregated prefill/decode each target a different bottleneck.
+
 ## 4.2 Request Router
 
 The router decides where a request goes.
@@ -568,6 +772,8 @@ KV-cache memory grows with:
 When concurrency rises, KV cache can become the limiting resource before raw compute does. Poor KV-cache management causes OOMs, evictions, cache fragmentation, or admission failures.
 
 Paged KV-cache approaches treat cache memory more like virtual memory: allocate blocks as needed, reuse freed blocks, and reduce fragmentation.
+
+For the model-architecture side of this tradeoff, see Chapter 0's discussion of MHA, MQA, GQA, and MLA. Those choices determine how much K/V state exists before the serving system has to manage it.
 
 ## 6.4 Streaming
 

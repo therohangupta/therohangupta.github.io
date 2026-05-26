@@ -232,3 +232,23 @@ Avoid it when labels cannot be verified, real distribution coverage is unknown, 
 I would monitor quality lift, rejection reasons, verifier/generator disagreement, latency, cost per successful answer, escalation rate, and slices where the verifier rejects too much or too little. I would also track whether candidates become optimized for the verifier while user outcomes stagnate.
 
 ---
+
+## Question 23
+
+**Why do larger models show emergent abilities?**
+
+### Sample Answer
+
+Emergent abilities appear when a model crosses a scale where it can represent and compose patterns that smaller models could not reliably use. Some of this is genuinely new behavior from more parameters, data, and compute; some is measurement, because a capability may improve smoothly but only become visible once it passes a benchmark threshold. In interviews, the careful answer is that scale improves representation, memorization, abstraction, and in-context learning, but "emergence" should be evaluated with controlled metrics rather than treated as magic.
+
+---
+
+## Question 24
+
+**Why is MLA both an architecture topic and a systems topic?**
+
+### Sample Answer
+
+MLA changes the attention representation so the model can cache a compressed latent form rather than full key/value state. Architecturally, this changes how attention information is represented and reconstructed. Operationally, it targets a serving bottleneck: long-context decoding can become dominated by KV-cache memory and memory bandwidth. The tradeoff is lower cache pressure at the cost of more model complexity and reconstruction work.
+
+---

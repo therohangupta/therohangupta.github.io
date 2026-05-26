@@ -19,8 +19,9 @@ This is a compositional map: topics build upward into the kind of systems compan
 8. [Chapter 6: Production ML systems](#8-chapter-6-production-ml-systems)
 9. [Chapter 7: System design (top layer)](#9-chapter-7-system-design-top-layer)
 10. [Chapter 8: Advanced and differentiation topics](#10-chapter-8-advanced-and-differentiation-topics)
-11. [How everything connects](#11-how-everything-connects)
-12. [Priority order (what to study first)](#12-priority-order-what-to-study-first)
+11. [Chapter 9: Software engineering fundamentals for AI systems](#11-chapter-9-software-engineering-fundamentals-for-ai-systems)
+12. [How everything connects](#12-how-everything-connects)
+13. [Priority order (what to study first)](#13-priority-order-what-to-study-first)
 
 ---
 
@@ -61,7 +62,7 @@ How decoder-style LLMs are built, trained, and served:
 
 - **Core stack:** tokens, embeddings, positional handling, self-attention, FFN blocks, residuals, normalization
 - **Why transformers won:** parallelism, long-range dependencies, scalable depth
-- **Architecture progression:** stable blocks (pre-norm, RMSNorm, RoPE, SwiGLU), MHA / MQA / GQA, sparse and sliding-window attention, MoE, FlashAttention and paged KV
+- **Architecture progression:** stable blocks (pre-norm, RMSNorm, RoPE, SwiGLU), MHA / MQA / GQA / MLA, sparse and sliding-window attention, MoE, FlashAttention and paged KV
 - **Training pipeline:** pretraining → SFT → preference / RL alignment
 - **Inference and cost:** prefill vs decode, KV cache, memory bandwidth, how each design choice hits latency and throughput
 - **Interview framing:** tradeoff cheat sheet, “what to say,” practice questions, takeaways
@@ -211,7 +212,23 @@ Signal boosters for strong candidates.
 
 ---
 
-## 11. How everything connects
+## 11. Chapter 9: Software engineering fundamentals for AI systems
+
+The engineering layer underneath production AI.
+
+### What this chapter covers
+
+- Python runtime behavior, memory management, the GIL, async, multiprocessing, decorators, and metaclasses
+- SQL optimization, indexing, partitioning, sharding, materialized views, and distributed data tradeoffs
+- Data pipelines, streaming systems, schema validation, and training-serving skew
+- Scalable Python backends for AI inference
+- Tech-stack mental models: PyTorch, TensorFlow, JAX, Transformers, DeepSpeed, FSDP, Ray, Gym, TRL-style workflows
+- Serving and infrastructure stacks: vLLM, TGI, Triton, Kubernetes, Slurm, Docker, Redis, queues
+- Data, retrieval, and observability stacks: Spark, Beam, Dask, Kafka, FAISS, pgvector, vector databases, OpenTelemetry, Prometheus, Grafana, W&B, MLflow
+
+---
+
+## 12. How everything connects
 
 **Compositional chain**
 
@@ -219,20 +236,20 @@ Signal boosters for strong candidates.
 - LLM → reasoning → tool use
 - Memory + tools + loop → agent
 - Agent + feedback → learning loop (RL)
-- Everything + infra → production system
+- Everything + infra + software fundamentals → production system
 
 **Compact form**
 
-LLM + retrieval + memory + tools + loop + feedback + infra = applied AI system—the kind of system Applied Compute is building.
+LLM + retrieval + memory + tools + loop + feedback + infra + software engineering = applied AI system—the kind of system Applied Compute is building.
 
 ---
 
-## 12. Priority order (what to study first)
+## 13. Priority order (what to study first)
 
 If you are time-constrained:
 
 | Tier | Priority | Topics |
 | ---- | -------- | ------ |
 | **1 — Must master** | Highest | Chapter 0; LLM engineering (prompting, tools); retrieval + memory; agents; evaluation |
-| **2 — Very important** | High | Learning loops (RLHF, continual learning); production systems |
+| **2 — Very important** | High | Learning loops (RLHF, continual learning); production systems; software engineering fundamentals |
 | **3 — Nice to have** | Lower | Advanced topics (Chapter 8) |

@@ -437,3 +437,253 @@ Long prompts can bury the actual task under irrelevant details, increase instruc
 
 ---
 
+## Question 43
+
+**What happens internally during token generation?**
+
+### Sample Answer
+
+Token generation is an iterative decoding loop. The model first tokenizes the prompt and runs a prefill pass to build hidden states and the KV cache. Then, for each new token, it reads the previous tokens through attention, produces logits over the vocabulary, applies decoding rules such as temperature or top-p, selects the next token, appends it to the sequence, and updates the KV cache. The process repeats until a stop token, length limit, or application stop rule is reached.
+
+---
+
+## Question 44
+
+**How do embedding models differ from generative models?**
+
+### Sample Answer
+
+Embedding models map inputs into vectors optimized for comparison, retrieval, clustering, or classification. Their output is a representation, not a continuation. Generative models produce tokens autoregressively or conditionally, so they are optimized to create text, code, images, or other outputs. In a RAG system, the embedding model usually finds relevant context, while the generative model uses that context to produce an answer.
+
+---
+
+## Question 45
+
+**Why does Batch Normalization improve training stability?**
+
+### Sample Answer
+
+Batch Normalization normalizes intermediate activations using batch statistics and then learns a scale and shift. This keeps activation distributions more stable across training, which allows larger learning rates, improves gradient flow, and reduces sensitivity to initialization. It also adds mild regularization because batch statistics introduce noise. The main caveat is that behavior depends on batch size and training versus inference statistics.
+
+---
+
+## Question 46
+
+**Explain vanishing and exploding gradients.**
+
+### Sample Answer
+
+Vanishing gradients happen when repeated multiplication through layers produces very small gradients, so early layers learn slowly or not at all. Exploding gradients happen when those products become very large, causing unstable updates and possible divergence. They are common in deep networks and long sequence models. Better initialization, normalization, residual connections, gated architectures, and gradient clipping all help control gradient scale.
+
+---
+
+## Question 47
+
+**What is the mathematical difference between L1 and L2 regularization?**
+
+### Sample Answer
+
+L1 regularization adds a penalty proportional to the absolute values of weights, usually $\lambda \sum_i |w_i|$. L2 regularization adds a penalty proportional to squared weights, usually $\lambda \sum_i w_i^2$. L1 encourages sparsity because its gradient has a constant pull toward zero and can drive weights exactly to zero. L2 discourages large weights smoothly and tends to shrink weights without making them exactly zero.
+
+---
+
+## Question 48
+
+**Why do ensemble methods improve performance?**
+
+### Sample Answer
+
+Ensembles combine multiple models so their errors can cancel out. If the individual models are accurate enough and make partially independent mistakes, averaging or voting reduces variance and improves robustness. Bagging reduces variance by training on different samples, boosting reduces bias by focusing on mistakes, and stacking learns how to combine model outputs. The tradeoff is more compute, latency, and operational complexity.
+
+---
+
+## Question 49
+
+**What is covariance shift?**
+
+### Sample Answer
+
+Covariate shift means the input distribution changes between training and production, while the relationship between inputs and labels may remain mostly similar. For example, a model trained on one user population may see a different population after launch. The model can fail because it must extrapolate outside the distribution it learned. Detection usually involves monitoring feature distributions, embedding distributions, and performance by slice.
+
+---
+
+## Question 50
+
+**Why does PCA maximize variance?**
+
+### Sample Answer
+
+PCA finds orthogonal directions that capture as much variance in the data as possible. The first principal component is the direction with maximum projected variance, and each later component maximizes remaining variance subject to being orthogonal to previous components. Mathematically, this comes from the eigenvectors of the covariance matrix. High variance directions are useful because they preserve the most information under a linear projection.
+
+---
+
+## Question 51
+
+**Explain bias-variance decomposition.**
+
+### Sample Answer
+
+Bias-variance decomposition separates expected prediction error into bias, variance, and irreducible noise. Bias is error from an overly simple or wrong model class. Variance is error from sensitivity to the particular training sample. Simple models often have high bias and low variance; very flexible models often have low bias and high variance. Good generalization requires balancing both, usually with enough data, regularization, and appropriate model capacity.
+
+---
+
+## Question 52
+
+**What is the curse of dimensionality?**
+
+### Sample Answer
+
+The curse of dimensionality is the set of problems that appear as feature dimension grows. Data becomes sparse, distances become less informative, nearest neighbors become less meaningful, and the amount of data needed to cover the space grows rapidly. This hurts retrieval, clustering, density estimation, and classical ML models. Dimensionality reduction, better representations, regularization, and more data can reduce the impact.
+
+---
+
+## Question 53
+
+**Why are Transformers better than RNNs for LLMs?**
+
+### Sample Answer
+
+Transformers are better suited for large language models because self-attention connects tokens directly and training can be parallelized across positions. RNNs process sequences step by step, which makes long-range dependencies harder to preserve and large-scale training slower. Transformers still have expensive attention, but their parallel training, scalable depth, and direct token-to-token interactions made them much more effective at modern scale.
+
+---
+
+## Question 54
+
+**Explain positional encoding.**
+
+### Sample Answer
+
+Self-attention by itself is permutation-invariant, so it needs position information to know token order. Positional encoding injects position into token representations, either with fixed functions like sinusoidal encodings or learned/relative schemes like RoPE. The goal is to let the model reason about order, distance, and sequence structure while still using attention over all tokens.
+
+---
+
+## Question 55
+
+**What is masked self-attention?**
+
+### Sample Answer
+
+Masked self-attention prevents a token from attending to future tokens. In decoder-only language models, each position can only use previous tokens and itself, preserving the autoregressive training objective. Without the causal mask, the model could cheat during training by seeing the answer token it is supposed to predict.
+
+---
+
+## Question 56
+
+**Why does attention work so well?**
+
+### Sample Answer
+
+Attention works well because it lets each token dynamically select relevant information from other tokens. Instead of compressing the whole past into one fixed state, the model computes content-dependent interactions between tokens. This supports long-range dependencies, in-context learning, retrieval-like behavior inside the context window, and flexible composition of information across a sequence.
+
+---
+
+## Question 57
+
+**What is the difference between encoder-only and decoder-only models?**
+
+### Sample Answer
+
+Encoder-only models use bidirectional attention, so each token can attend to tokens on both sides. They are strong for representation tasks such as classification, retrieval embeddings, and token labeling. Decoder-only models use causal attention, so they generate text one token at a time from left to right. They are the standard architecture for general-purpose LLM assistants because generation is the core behavior.
+
+---
+
+## Question 58
+
+**What are residual connections and why are they important?**
+
+### Sample Answer
+
+Residual connections add a layer's input back to its output, so the block learns an update rather than a completely new representation. This improves gradient flow, makes very deep networks easier to optimize, and preserves information across layers. In Transformers, the residual stream acts like a shared state that attention and MLP blocks repeatedly read from and write to.
+
+---
+
+## Question 59
+
+**Explain gradient clipping.**
+
+### Sample Answer
+
+Gradient clipping limits gradient magnitude before an optimizer update. The most common version clips the global norm if it exceeds a threshold. This prevents rare large gradients from causing unstable parameter jumps, especially in deep networks, sequence models, and RL. It does not fix the underlying modeling issue by itself, but it is a practical stability guardrail.
+
+---
+
+## Question 60
+
+**What causes unstable training in deep networks?**
+
+### Sample Answer
+
+Unstable training can come from poor initialization, learning rates that are too high, exploding or vanishing gradients, bad normalization, noisy data, sharp loss landscapes, mixed-precision overflow, or objectives with high variance. In large models, instability can also come from distributed training issues and bad batch composition. Engineers usually address it with normalization, residual connections, careful initialization, learning-rate schedules, gradient clipping, and monitoring activation and gradient statistics.
+
+---
+
+## Question 61
+
+**What is temperature scaling in softmax?**
+
+### Sample Answer
+
+Temperature scaling divides logits by a temperature before softmax. Lower temperature sharpens the distribution, making high-probability tokens even more likely. Higher temperature flattens the distribution, increasing randomness and diversity. In generation, temperature controls sampling behavior. In calibration, temperature can be tuned after training to make predicted probabilities better match observed accuracy.
+
+---
+
+## Question 62
+
+**How does KV caching improve LLM inference speed?**
+
+### Sample Answer
+
+KV caching stores the key and value tensors for previous tokens during decoding. Without it, the model would recompute attention states for the whole prefix every time it generates a new token. With the cache, each step only computes the new token's projections and attends to stored keys and values. This makes autoregressive generation much faster, especially for long contexts, though it increases GPU memory usage.
+
+---
+
+## Question 63
+
+**Explain attention complexity and why it becomes expensive.**
+
+### Sample Answer
+
+Full self-attention compares every token with every other token, so training-time attention work and memory scale roughly as $O(n^2)$ with sequence length. During decoding, each new token attends over the growing KV cache, so per-token latency grows with context length. This becomes expensive for long prompts because more attention scores, more memory movement, and larger caches are required. Techniques like sliding-window attention, sparse attention, FlashAttention, and GQA reduce different parts of this cost.
+
+---
+
+## Question 64
+
+**What is automatic differentiation, and how is it different from finite differences?**
+
+### Sample Answer
+
+Finite differences estimate derivatives by evaluating the function at nearby points, which is approximate and far too expensive for large neural networks. Automatic differentiation records the computation graph during the forward pass and applies the chain rule backward to compute exact gradients for the executed tensor operations. This is what powers backpropagation in frameworks like PyTorch.
+
+---
+
+## Question 65
+
+**Why are tensors the core abstraction in ML frameworks?**
+
+### Sample Answer
+
+Tensors let frameworks represent many scalar operations as one structured array operation. That matters because tensor operations can be dispatched to optimized CPU or GPU kernels, tracked in a computation graph, batched across examples, and differentiated efficiently. The practical mental model is: math becomes tensor operations, tensor operations become kernels, and kernels execute on hardware.
+
+---
+
+## Question 66
+
+**Why does tokenization affect model cost and behavior?**
+
+### Sample Answer
+
+Tokenization defines the discrete units the model sees. A tokenizer can split text into words, subwords, punctuation, bytes, or common chunks learned by methods like BPE. This affects context length, cost, multilingual behavior, code behavior, rare names, and compatibility with model weights. More tokens means more attention work, more KV-cache memory, and often worse latency.
+
+---
+
+## Question 67
+
+**What is causal masking in decoder-only transformers?**
+
+### Sample Answer
+
+Causal masking prevents a token from attending to future tokens during training. The model computes attention scores across a sequence, masks future positions to negative infinity, and softmax turns those positions into zero weight. This lets training parallelize across positions while preserving the left-to-right generation constraint used at inference time.
+
+---
+

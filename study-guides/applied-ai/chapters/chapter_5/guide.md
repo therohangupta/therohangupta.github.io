@@ -332,7 +332,194 @@ RLHF learns a reward model and then optimizes the policy against it.
 DPO directly trains the policy from chosen-vs-rejected examples.
 ```
 
-## 4.5 Online Learning
+## 4.5 Parameter-Efficient Fine-Tuning: LoRA and Adapters
+
+Full fine-tuning updates all or most of the model's weights.
+
+That is powerful, but expensive:
+
+* every trainable parameter needs gradient memory,
+* optimizer states can be larger than the weights,
+* checkpoints are large,
+* deployment artifacts are heavy,
+* the update can damage broad capabilities if the dataset is narrow.
+
+Parameter-efficient fine-tuning, or PEFT, asks a different question:
+
+```text
+Can we adapt the model by training a small number of extra parameters
+while keeping the base model mostly frozen?
+```
+
+This changes the **parameterization of the update**. Instead of letting optimization move the entire model, PEFT constrains where learning can happen.
+
+### The Core Mental Model
+
+The base model already contains broad capability.
+
+PEFT adds a small learned modification:
+
+```text
+frozen base model
+  + small trainable adaptation
+  -> adapted behavior
+```
+
+So the model does not relearn language, reasoning, or world knowledge from scratch. It learns a targeted behavioral shift.
+
+This is why PEFT sits naturally in post-training and continual learning:
+
+* you already have a pretrained or instruction-tuned base model,
+* you want a domain/task/style adaptation,
+* you want to reduce training cost and blast radius,
+* you still need eval gates because the behavior changed.
+
+### LoRA
+
+LoRA stands for low-rank adaptation.
+
+The intuition:
+
+Full fine-tuning changes a weight matrix:
+
+```text
+W -> W + Delta W
+```
+
+LoRA represents the update with two much smaller low-rank matrices:
+
+```text
+Delta W = A B
+```
+
+where `A` and `B` are trainable, but the original weight matrix `W` is frozen.
+
+The practical mental model:
+
+```text
+frozen base weights + small trainable low-rank adapters
+```
+
+During training, gradients update the adapter matrices. During inference, the adapter modifies the layer's behavior. Depending on the system, the adapter can be kept separate or merged into the base weights for deployment.
+
+### Why Low-Rank Helps
+
+Many useful task-specific updates do not need to move the model in every possible parameter direction.
+
+LoRA assumes the useful update can be approximated in a lower-dimensional subspace.
+
+That gives:
+
+* fewer trainable parameters,
+* lower optimizer memory,
+* smaller checkpoints,
+* faster experiments,
+* easier per-domain adapters,
+* less infrastructure cost than full fine-tuning.
+
+### Adapters More Broadly
+
+LoRA is one PEFT method. The broader adapter family includes methods that add small trainable modules, prompt-like parameters, prefix parameters, or other constrained update paths.
+
+The shared idea:
+
+```text
+freeze most of the model
+train a small controlled adaptation
+```
+
+Different methods place the trainable capacity in different places. Some modify attention projections. Some add modules between layers. Some learn prefix/prompt representations. The details differ, but the design question is the same:
+
+> Where should optimization be allowed to change the model?
+
+### When PEFT / LoRA Is Useful
+
+Use LoRA or PEFT when:
+
+* full fine-tuning is too expensive,
+* you need fast domain adaptation,
+* you want separate adapters for different customers or tasks,
+* the base model is already strong,
+* the desired change is narrow,
+* you want smaller deployable deltas,
+* you want to reduce catastrophic forgetting risk.
+
+Examples:
+
+* adapt a general model to support-ticket tone,
+* tune a code model for one repository style,
+* adapt a model to medical or legal formatting,
+* improve tool-call formatting,
+* create a customer-specific adapter without copying the whole base model.
+
+### When PEFT / LoRA Is Not Enough
+
+LoRA is not magic.
+
+It may be insufficient when:
+
+* the base model lacks the underlying capability,
+* the domain shift is very large,
+* the task needs deep new reasoning patterns,
+* the adaptation data is low quality,
+* the adapter rank is too small,
+* the target behavior conflicts with base-model behavior,
+* broad safety or alignment behavior must change.
+
+If the base model cannot do the task at all, a small adapter may only teach surface style.
+
+### How It Compares to Other Updates
+
+| Method | What changes | Best for | Main risk |
+| ------ | ------------ | -------- | --------- |
+| Prompting | input context only | fast behavior steering | brittle, context-limited |
+| RAG | external knowledge in context | fresh/private facts | retrieval noise |
+| LoRA / PEFT | small trainable adaptation | cheap targeted behavior shift | adapter/base mismatch, narrow overfit |
+| Full fine-tuning | many or all weights | broad behavioral/domain change | cost, forgetting, safety regression |
+| Preference optimization | likelihood of preferred outputs | alignment and preference shaping | preference data bias |
+| RLHF / RL | policy over trajectories | interactive or long-horizon behavior | reward hacking, instability |
+
+### Evaluation Requirements
+
+A LoRA adapter is still a model update.
+
+Evaluate:
+
+* target task quality,
+* general regression,
+* safety behavior,
+* formatting/schema accuracy,
+* hallucination rate,
+* latency and memory impact,
+* compatibility with quantization or serving stack,
+* adapter/base/tokenizer version correctness.
+
+The common mistake is only evaluating the narrow task the adapter was trained on.
+
+### Deployment Mental Model
+
+The deployable artifact is not just the adapter.
+
+It is:
+
+```text
+base model
+  + tokenizer
+  + config
+  + adapter weights
+  + adapter metadata
+  + eval results
+```
+
+If the adapter is loaded against the wrong base model, wrong tokenizer, or wrong quantization setting, behavior can silently break.
+
+Chapter 9 covers this engineering side: registries, artifact lineage, serving adapters, and versioning.
+
+### Interview Framing
+
+> PEFT methods like LoRA freeze the base model and train a small constrained update. LoRA represents the update to a weight matrix with low-rank adapter matrices, which reduces trainable parameters and optimizer memory. It is useful for targeted domain or behavior adaptation when the base model is already capable. It still needs eval gates because it can overfit, regress safety, or fail if the adapter is paired with the wrong base model.
+
+## 4.6 Online Learning
 
 Online learning updates behavior as new data arrives.
 
@@ -355,7 +542,7 @@ For LLMs, full online weight updates are less common because safety, regression 
 * collecting preference data for batch post-training
 * using bandits to choose among model variants
 
-## 4.6 Continual Learning
+## 4.7 Continual Learning
 
 Continual learning means updating a model over time while preserving previous capabilities.
 
@@ -373,7 +560,7 @@ Common mitigation patterns:
 
 Continual learning is not just "train again." It is controlled change management for model behavior.
 
-## 4.7 Self-Improvement Loops
+## 4.8 Self-Improvement Loops
 
 A self-improvement loop uses the model or system to generate training candidates, critique outputs, solve tasks, create synthetic data, or propose refinements.
 
@@ -396,7 +583,7 @@ Self-improvement loops need external anchors:
 * held-out evaluations
 * production outcome checks
 
-## 4.8 Learning Loop Operations
+## 4.9 Learning Loop Operations
 
 The algorithm is only one part of the learning loop. In deployed systems, most of the work is operational:
 

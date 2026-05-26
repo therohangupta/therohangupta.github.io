@@ -157,6 +157,115 @@ Explains:
 
 ---
 
+### Automatic Differentiation and Computation Graphs
+
+Gradient descent needs gradients.
+
+The simplest way to estimate a derivative is a finite difference:
+
+$$
+f'(x) \approx \frac{f(x + \epsilon) - f(x - \epsilon)}{2\epsilon}
+$$
+
+This is useful conceptually, but it is not how modern ML frameworks train large models. Finite differences are too slow and too noisy when a model has millions or billions of parameters.
+
+Instead, frameworks use **automatic differentiation**.
+
+The mental model:
+
+```text
+forward pass:
+  compute outputs and remember how each value was produced
+
+backward pass:
+  traverse the computation graph backward and apply the chain rule
+```
+
+A computation graph records operations:
+
+```text
+x -> log(x) -> square(log(x)) -> loss
+```
+
+Each node knows:
+
+* what operation produced it,
+* which inputs fed that operation,
+* how to pass gradients backward through that operation.
+
+Backpropagation is reverse-mode automatic differentiation:
+
+```text
+loss
+  -> gradient of final operation
+  -> gradient of previous operation
+  -> ...
+  -> gradients of parameters
+```
+
+The key idea is not that the framework "magically knows calculus." It records the graph of tensor operations and repeatedly applies the chain rule.
+
+This is why PyTorch's eager autograd model is so intuitive: as tensor operations run, PyTorch builds the graph needed for the backward pass.
+
+Interview framing:
+
+> Training uses a forward pass to compute loss and build the computation graph, then a backward pass to propagate gradients through that graph using the chain rule. Autodiff gives exact gradients for the executed operations, unlike finite differences, which are approximate and too expensive at scale.
+
+---
+
+### Tensors as the Practical Unit of ML Computation
+
+The scalar mental model is useful:
+
+```text
+number -> operation -> number -> operation -> loss
+```
+
+But real models do not operate one scalar at a time.
+
+They operate on tensors:
+
+| Object | Shape intuition |
+| ------ | --------------- |
+| Scalar | one number |
+| Vector | list of numbers |
+| Matrix | table of numbers |
+| Tensor | multidimensional array |
+
+For example, an RGB image might be:
+
+```text
+(channels, height, width) = (3, 224, 224)
+```
+
+A batch of token embeddings might be:
+
+```text
+(batch, sequence, hidden_dim)
+```
+
+Tensors matter for two reasons:
+
+1. **Memory:** the framework tracks one tensor operation instead of millions of independent scalar objects.
+2. **Parallelism:** tensor operations map naturally to CPU vectorization and GPU kernels.
+
+Matrix multiplication is the core operation behind neural networks. Instead of computing every output scalar one at a time in Python, frameworks dispatch large tensor operations to optimized native kernels.
+
+This is the bridge from math to systems:
+
+```text
+model equation
+  -> tensor operation
+  -> optimized kernel
+  -> CPU/GPU execution
+```
+
+Interview framing:
+
+> Tensors are the practical unit of computation in ML frameworks. They let the framework batch many scalar operations into one graph node and execute them efficiently on optimized hardware.
+
+---
+
 ## 3. Embeddings — Meaning as Geometry
 
 ### Core Idea
@@ -771,6 +880,33 @@ This matters because model cost scales with the **number of tokens**, not the nu
 
 If the tokenizer splits aggressively, then prompts get longer, which increases attention cost and KV-cache memory.
 
+#### BPE Intuition
+
+One common tokenizer family is byte pair encoding (BPE).
+
+The rough mental model:
+
+```text
+start with small symbols
+  -> count frequent adjacent pairs
+  -> merge the most frequent pair into a new token
+  -> repeat until the vocabulary reaches the target size
+```
+
+This creates tokens that are often subwords rather than full words. Common chunks become single tokens; rare strings get broken into smaller pieces.
+
+Why it matters:
+
+* tokenization determines what the model can directly represent,
+* rare words, code, names, and non-English text may become more tokens,
+* more tokens means more context cost,
+* tokenizer/model mismatch can break a checkpoint,
+* token boundaries can affect generation behavior.
+
+Interview framing:
+
+> A tokenizer is not just preprocessing. It defines the discrete units the model sees, and those units affect context length, cost, multilingual behavior, code behavior, and compatibility with model weights.
+
 ---
 
 ### 7.2 Embeddings
@@ -840,6 +976,35 @@ Intuition:
 * values carry the information forward
 
 So attention is not "reasoning" in the human sense. It is **information routing**.
+
+Library analogy:
+
+```text
+query = the question this token is asking
+key = the label or title each token presents
+value = the content that gets pulled in if the key matches
+```
+
+The model compares queries to keys, turns those scores into weights with softmax, and then mixes values according to those weights.
+
+#### Causal Masking
+
+Decoder-only language models generate left to right.
+
+During training, the model sees full sequences, so it needs a mask to prevent cheating:
+
+```text
+token i can attend to tokens <= i
+token i cannot attend to tokens > i
+```
+
+Implementation intuition:
+
+* compute all token-token scores in a matrix,
+* set future-token positions to $-\infty$,
+* softmax turns those positions into zero attention weight.
+
+This is why training can still parallelize across positions even though generation is sequential at inference time.
 
 #### Deeper View: Attention as a Computational Object
 
@@ -1046,6 +1211,7 @@ These changes mostly improved trainability and efficiency without changing the h
 
 * MQA
 * GQA
+* MLA
 
 These reduce the size of the key/value cache and improve decode-time bandwidth usage.
 
@@ -1076,15 +1242,46 @@ These do not fundamentally change the model's learning objective, but they can d
 
 ---
 
-## 10. MHA vs MQA vs GQA
+## 10. KV Cache, MHA, MQA, GQA, and MLA
 
 This is one of the most important architecture progressions for interview purposes.
+
+There are two related but separate ideas:
+
+1. **Attention architecture** determines how queries, keys, and values are represented.
+2. **KV caching** determines what previous token representations are stored and reused during inference.
+
+The architecture defines **what exists**. The KV cache defines **what gets stored**.
+
+During autoregressive decoding, each new token needs to attend to previous tokens:
+
+$$
+\text{softmax}(Q_t K_{1:t}^T)V_{1:t}
+$$
+
+Without a KV cache, the model would repeatedly recompute old keys and values for the full prefix. With a KV cache, the model computes each token's K/V once, appends them to the cache, and reuses them during later decode steps.
+
+Queries are not cached because future tokens do not need old queries. A future token creates its own current query and compares it against previous keys:
+
+$$
+Q_{\text{current}} K_{\text{past}}^T
+$$
+
+So the key inference question becomes: **how many K/V representations must be stored per token, per layer?**
 
 ### 10.1 Standard Multi-Head Attention (MHA)
 
 In MHA, each head has its own Q, K, and V projections.
 
 If there are $h$ heads, then the KV cache stores keys and values for every head.
+
+Conceptually:
+
+```text
+Token t:
+[K_h1 K_h2 K_h3 ... K_h]
+[V_h1 V_h2 V_h3 ... V_h]
+```
 
 #### Pros
 
@@ -1105,6 +1302,15 @@ If there are $h$ heads, then the KV cache stores keys and values for every head.
 MQA shares the key and value heads across all query heads.
 
 So instead of having separate K/V per head, all heads use shared K/V.
+
+Queries remain multi-head. The sharing only happens for keys and values:
+
+```text
+Q_head1 ─┐
+Q_head2 ─┼────► shared K/V
+Q_head3 ─┤
+Q_head4 ─┘
+```
 
 #### Why it helps
 
@@ -1129,6 +1335,15 @@ GQA is the middle ground.
 
 Instead of one shared K/V pair for all heads, heads are divided into groups, and each group shares K/V.
 
+For example, eight query heads might share two K/V groups:
+
+```text
+Q1 Q2 Q3 Q4 | Q5 Q6 Q7 Q8
+      │              │
+      ▼              ▼
+ KV Group A      KV Group B
+```
+
 #### Why GQA exists
 
 It aims to keep most of the quality of MHA while gaining much of the decode-time efficiency of MQA.
@@ -1145,14 +1360,63 @@ GQA has become very common in modern decoder LLMs because it is a strong quality
 
 ---
 
-### 10.4 Quantifying the KV Cache
+### 10.4 Multi-Head Latent Attention (MLA)
+
+MLA is another step in the same direction: reduce KV-cache size without giving up too much attention quality.
+
+The core idea is not to cache full explicit K/V tensors. Instead, the model compresses the token representation into a smaller latent vector, caches that latent, and reconstructs the needed K/V representations from it.
+
+Conceptually:
+
+$$
+c_t = W_D x_t
+$$
+
+where $c_t$ is a compressed latent representation. Later, keys and values can be reconstructed:
+
+$$
+K_t = W_{UK} c_t
+$$
+
+$$
+V_t = W_{UV} c_t
+$$
+
+So the cache stores:
+
+```text
+Token t:
+[c_t]
+```
+
+instead of:
+
+```text
+Token t:
+[K_t ...]
+[V_t ...]
+```
+
+#### Why MLA matters
+
+KV-cache memory becomes enormous for large models, long contexts, and high concurrency. MLA attacks that bottleneck by caching a compressed representation rather than full per-head K/V tensors.
+
+The tradeoff is that the model has to learn a compression and reconstruction path that preserves enough attention information. In systems terms, MLA is a memory-bandwidth optimization built into the model architecture itself.
+
+---
+
+### 10.5 Quantifying the KV Cache
 
 Let:
 
 * $h$ = query heads
 * $h_{kv}$ = KV heads
 
-KV size $\propto h_{kv}$
+For MHA, MQA, and GQA:
+
+$$
+\text{KV size} \propto h_{kv}
+$$
 
 | Type | KV Heads |
 |------|----------|
@@ -1187,30 +1451,54 @@ This is why:
 * long conversations are expensive
 * batching is hard
 
+For MLA, the cache is better thought of as:
+
+$$
+\text{Cache Memory} \approx B \cdot L \cdot T \cdot d_{\text{latent}}
+$$
+
+where $d_{\text{latent}}$ is the compressed latent size. The important point is conceptual: MLA makes cache growth depend on a smaller compressed representation rather than explicit K/V heads.
+
 ---
 
-### 10.5 How MQA/GQA Affect Latency and Memory
+### 10.6 How MQA, GQA, and MLA Affect Latency and Memory
 
 During decoding, the bottleneck is often loading KV cache, not just doing math.
 
 Even if FLOPs stay similar:
 
-> reducing $h_{kv}$ reduces memory reads per token
+> reducing stored K/V state reduces memory reads per token
 
-So reducing KV heads can materially improve:
+So reducing stored K/V state can materially improve:
 
 * GPU memory usage
 * batch size
 * throughput
 * token latency
 
-This is why MQA/GQA are so important for serving.
+This is why MQA, GQA, and MLA are so important for serving.
 
 A rough mental model:
 
 * MHA = largest KV cache
 * GQA = medium KV cache
-* MQA = smallest KV cache
+* MQA = small KV cache
+* MLA = compressed latent cache
+
+| Architecture | Query Heads | What Is Stored Per Token | Cache Growth |
+|--------------|-------------|--------------------------|--------------|
+| MHA | many | K/V for every head | largest |
+| GQA | many | K/V per head group | medium |
+| MQA | many | one shared K/V | small |
+| MLA | many | compressed latent representation | very small |
+
+Important final note: KV caching removes redundant recomputation of old K/V, but it does not remove attention over previous tokens. At timestep $t$, the model still attends against prior context:
+
+$$
+Q_t K_{1:t}^T
+$$
+
+So memory grows with the cache, and compute still grows with effective context length.
 
 ---
 

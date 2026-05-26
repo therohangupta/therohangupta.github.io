@@ -442,10 +442,13 @@ Common optimization concepts:
 * batching: process multiple requests together to improve GPU utilization
 * continuous batching: dynamically add and remove requests during serving
 * KV cache: store previous attention keys and values so decoding does not recompute the full prefix
+* chunked prefill: split long prompt processing into pieces so it does not monopolize the GPU
+* prefix caching: reuse cached prefix state for repeated system prompts or templates
 * paged attention: manage KV cache memory more efficiently
 * quantization: reduce precision to save memory and bandwidth
 * FlashAttention: reduce memory movement in attention computation
 * speculative decoding: draft tokens with a cheaper model and verify with a larger one
+* MLA / latent KV-style designs: cache a compressed latent representation instead of full key/value state
 * tensor parallelism: split model computation across GPUs
 * pipeline parallelism: split model layers across GPUs
 * profiling: measure where time is actually spent before optimizing
@@ -824,12 +827,24 @@ Likely bottlenecks:
 The fix depends on measurement:
 
 * reduce prompt tokens,
-* use GQA/MQA models,
+* use GQA/MQA/MLA-style architectures when model choice is flexible,
 * apply paged KV cache,
 * tune batching policy,
 * cache repeated prefixes,
 * stream earlier,
 * route long-context requests separately.
+
+Chapter 0 covers the architecture-level reason these model choices matter: MHA, MQA, GQA, and MLA change what has to be stored in the KV cache. This section is about diagnosing when that architectural detail becomes a production bottleneck.
+
+MLA is a good example of an advanced topic because it is both architectural and operational:
+
+```text
+full K/V cache
+  -> compressed latent cache
+  -> reconstruct attention information when needed
+```
+
+The benefit is lower memory pressure for long-context decode. The cost is added model complexity and reconstruction work. A strong answer should connect MLA to the same serving bottleneck as MQA/GQA: the KV cache can dominate memory bandwidth and VRAM.
 
 The case-study lesson: advanced model behavior and advanced systems behavior meet at serving time. Test-time compute, long context, verifiers, and agents all create more variable workloads, so systems optimization becomes part of product quality.
 

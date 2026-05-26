@@ -330,3 +330,13 @@ Avoid an agent when the task is simple, deterministic, high-risk, cheap to solve
 I would inspect traces rather than only the final answer: prompt version, retrieved context, tool calls, validation failures, model parameters, latency, user segment, and route. Then I would compare production failures to offline eval cases to identify distribution shift. Common causes are noisy retrieval, prompt accumulation, hidden user intents, tool errors, schema drift, and missing eval coverage.
 
 ---
+
+## Question 32
+
+**How would you detect hallucinations automatically?**
+
+### Sample Answer
+
+I would treat hallucination detection as claim verification, not vibes. For grounded tasks, extract factual claims from the answer and check whether each claim is supported by retrieved sources, citations, tool outputs, or a trusted database. Deterministic checks are best when possible, such as verifying IDs, dates, calculations, and citation spans. For open-ended claims, I would use calibrated judge models or human review on sampled traffic, track unsupported-claim rate, and slice failures by retrieval quality, prompt version, and task type.
+
+---

@@ -230,3 +230,13 @@ I would build an eval set from real support intents, historical escalations, pol
 ### Sample Answer
 
 I would check whether the eval set matches current traffic, whether aggregate gains hide slice regressions, whether synthetic cases overweight easy patterns, whether the judge model rewards style over correctness, and whether online traffic has retrieval, latency, or tool failures not represented offline. I would inspect traces from bad user reports and add those cases to the regression suite.
+
+---
+
+## Question 23
+
+**What are ROC-AUC's limitations on imbalanced datasets?**
+
+### Sample Answer
+
+ROC-AUC measures how well positives are ranked above negatives across thresholds, but it can look strong even when performance on the rare class is poor. On highly imbalanced datasets, the false positive rate can stay small simply because there are many negatives, while the absolute number of false positives is still too large for the product. Precision-recall curves, precision at k, recall at an operating threshold, calibration, and cost-sensitive metrics are often more informative for rare-event problems.

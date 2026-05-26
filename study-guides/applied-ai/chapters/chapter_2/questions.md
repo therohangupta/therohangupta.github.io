@@ -250,3 +250,13 @@ Retrieval changes the input signal. Instead of asking the model to answer from p
 ### Sample Answer
 
 I would monitor retrieval latency, empty-result rate, recall and precision on evaluation sets, reranker latency, cache hit rate, index freshness, embedding failures, permission-filter behavior, citation support rate, memory growth, and user feedback on answer quality. I would also log query rewrites, filters, retrieved chunk IDs, and index versions for debugging.
+
+---
+
+## Question 25
+
+**What are the tradeoffs between fine-tuning and RAG?**
+
+### Sample Answer
+
+Fine-tuning changes model weights, so it is useful for teaching durable behavior, domain style, formats, and task patterns. It is less ideal for fast-changing facts because updating weights is slower, riskier, and harder to audit. RAG keeps knowledge outside the model and retrieves it at runtime, which makes updates, citations, permissions, and freshness easier. The tradeoff is that RAG adds retrieval latency and can fail if chunking, ranking, or context construction is poor. In production, fine-tuning often shapes behavior while RAG supplies current or private knowledge.
