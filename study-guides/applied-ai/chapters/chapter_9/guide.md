@@ -2393,6 +2393,134 @@ Interview framing:
 
 > Distributed training is not one trick. I would choose the parallelism strategy based on what does not fit: batch size, parameters, activations, sequence length, or expert capacity. Then I would monitor GPU utilization, communication time, memory, data loading, and checkpoint overhead.
 
+### Scale-Up, Scale-Out, and MoE Rack Layout
+
+Large sparse models are shaped by physical hardware topology.
+
+Two network domains matter:
+
+| Domain | Mental model | Typical property |
+| ------ | ------------ | ---------------- |
+| Scale-up | fast local accelerator fabric inside a rack or pod | high bandwidth, low latency, dense connectivity |
+| Scale-out | network between racks or pods | slower, more hops, more topology constraints |
+
+MoE layers are especially sensitive to this because expert routing creates all-to-all communication.
+
+Mental model:
+
+```text
+tokens on every GPU
+  -> router chooses experts
+  -> tokens are sent to expert GPUs
+  -> expert outputs are sent back and combined
+```
+
+If experts live inside one fast scale-up domain, any GPU can send tokens to any expert with high bandwidth. If the expert layer crosses rack boundaries, many routed tokens must use slower scale-out links.
+
+This is why one rack or one scale-up domain becomes a natural boundary for an MoE layer. The model architecture wants:
+
+```text
+all-to-all expert traffic
+  -> fast dense interconnect
+  -> keep experts inside the scale-up domain when possible
+```
+
+Interview framing:
+
+> MoE is not just an algorithmic sparsity trick. It creates an all-to-all communication pattern, so the physical interconnect can determine how large an expert-parallel group should be.
+
+### Why Expert Parallelism Fits MoE
+
+Expert parallelism places different experts on different devices.
+
+This matches the structure of an MoE layer:
+
+```text
+many experts
+  -> split experts across GPUs
+  -> route tokens to the selected experts
+```
+
+The good part:
+
+* active compute per token can stay low,
+* total parameter capacity can grow,
+* each GPU only owns a subset of experts.
+
+The hard part:
+
+* token routing can be imbalanced,
+* all-to-all communication can dominate,
+* expert placement must respect topology,
+* larger sparsity may need larger batches to amortize weight movement,
+* total parameter memory still has to fit somewhere.
+
+This is the systems reason sparse models often depend on careful co-design between model architecture, router behavior, batch size, and hardware topology.
+
+### Pipeline Parallelism Limits
+
+Pipeline parallelism splits layers across stages:
+
+```text
+layers 1-20 -> stage 1
+layers 21-40 -> stage 2
+layers 41-60 -> stage 3
+```
+
+It helps when model weights do not fit in one device or one scale-up domain.
+
+But it introduces pipeline bubbles:
+
+```text
+start of batch:
+  later stages wait
+
+end of batch:
+  earlier stages wait
+```
+
+Micro-batches reduce idle time by keeping multiple chunks in flight. This is easier during inference because there is only a forward pass. During training, the backward pass, gradient accumulation, and optimizer step make scheduling much more complicated.
+
+The deeper limitation for LLM inference is KV cache.
+
+Pipeline parallelism divides model weights across stages, but it does not necessarily reduce KV-cache pressure in the way people first expect. To keep $P$ pipeline stages busy, the system often needs roughly $P$ micro-batches in flight. Splitting layers across $P$ stages reduces per-stage KV layers, but increasing in-flight micro-batches pushes active sequence count up. Those effects can cancel.
+
+Mental model:
+
+```text
+pipeline parallelism:
+  helps weight capacity
+  adds scheduling complexity
+  creates bubbles
+  can add cross-stage latency
+  does not magically solve long-context KV pressure
+```
+
+This is why pipeline parallelism is often a tradeoff rather than a pure win.
+
+### Pipeline Parallelism and Research Iteration
+
+Pipeline boundaries can also constrain architecture.
+
+If a model has simple sequential layers, splitting layers across stages is natural. But newer architectures may include:
+
+* attention patterns that refer to residuals from many previous layers,
+* alternating global and local attention layers,
+* nonuniform MoE or routing behavior,
+* layer types with very different compute or memory cost.
+
+Those features can create load imbalance or force awkward cross-stage communication.
+
+The engineering risk:
+
+```text
+parallelism scheme hard-codes architecture assumptions
+  -> model researchers avoid changes that break the system
+  -> iteration slows down
+```
+
+Strong infrastructure should support the model architecture rather than accidentally dictating it.
+
 ### Checkpointing and Fault Tolerance
 
 Large training jobs fail.

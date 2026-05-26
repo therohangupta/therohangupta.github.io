@@ -302,3 +302,23 @@ I would use LoRA when the base model is already capable and I need a targeted ad
 The adapter can overfit a narrow dataset, improve the target task while hurting general behavior, or weaken safety behavior in slices not covered by evals. Deployment can also fail if the adapter is paired with the wrong base model, tokenizer, config, or quantization setup. A LoRA adapter should be tracked with its base model, data version, training config, and eval results.
 
 ---
+
+## Question 30
+
+**Why might a deployed model be trained beyond the Chinchilla-optimal token count?**
+
+### Sample Answer
+
+Chinchilla-style rules optimize pretraining loss for a fixed pretraining compute budget, but deployed models are optimized over pretraining, post-training, and inference economics. If a model will serve massive traffic, extra training can be worthwhile if it improves quality, reduces active inference cost, or makes a smaller/sparser model viable. The practical objective is not only "best pretraining loss per FLOP"; it is user value per total lifecycle compute.
+
+---
+
+## Question 31
+
+**How do pretraining, RL, and inference compute costs differ?**
+
+### Sample Answer
+
+Pretraining is roughly forward plus backward over large batches, often estimated as about $6ND$ FLOPs. Inference is forward-only, roughly $2ND$, but decode can have poor hardware utilization because it is sequential and memory-bandwidth-bound. RL or post-training can include rollout generation, reward scoring, and policy updates, so its cost is not just the number of training tokens. A good estimate must account for decode inefficiency, reward models, environment calls, and what fraction of rollouts actually receive backward updates.
+
+---

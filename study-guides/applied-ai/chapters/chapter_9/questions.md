@@ -476,3 +476,33 @@ CUDA work is organized as a grid of blocks, where blocks contain warps and warps
 Each GPU kernel launch has overhead, and intermediate tensors often require extra memory reads and writes. Many tiny operations can spend more time on launch overhead, synchronization, and memory movement than useful math. A fused operation does more work per launch and can keep intermediate values closer to the compute, which is why optimized kernels and compiler fusion matter for high-throughput ML systems.
 
 ---
+
+## Question 47
+
+**Why is one scale-up domain a natural boundary for an MoE layer?**
+
+### Sample Answer
+
+MoE routing creates all-to-all traffic: tokens on many GPUs may need to visit experts on many other GPUs, then return to be combined. Inside a scale-up domain, accelerators usually have much faster and denser interconnect. Across racks or scale-out links, bandwidth is lower and latency is higher. Keeping an expert-parallel MoE layer inside the fast domain avoids making all-to-all routing the bottleneck.
+
+---
+
+## Question 48
+
+**Why does pipeline parallelism not automatically solve KV-cache memory pressure?**
+
+### Sample Answer
+
+Pipeline parallelism splits layers across stages, so it helps with model weight capacity. But to keep multiple stages busy, the system needs multiple micro-batches in flight. Splitting layers reduces the KV stored per stage, while more in-flight micro-batches increase the active sequence count. These effects can cancel, so pipeline parallelism is not a magic fix for long-context KV pressure. It also adds bubbles, scheduling complexity, and cross-stage latency.
+
+---
+
+## Question 49
+
+**How can a distributed parallelism scheme slow research iteration?**
+
+### Sample Answer
+
+If the parallelism scheme assumes a specific architecture, model changes can become expensive. Pipeline boundaries may make cross-layer residual attention, alternating attention patterns, or uneven layer costs hard to implement. Expert placement may assume a fixed topology. When researchers avoid useful architecture changes because the infrastructure cannot support them, the system is constraining research instead of enabling it.
+
+---

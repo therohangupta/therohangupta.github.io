@@ -424,6 +424,100 @@ Use evaluations to validate behavior.
 Use production monitoring to catch drift.
 ```
 
+## 7.1 Neural Nets and Cryptography: Mixing vs Structure Extraction
+
+A useful analogy from systems thinking is that neural networks and cryptographic primitives both mix information across many layers.
+
+The goals are opposite:
+
+| System | Goal |
+| ------ | ---- |
+| Cryptography | take structured input and make output look random |
+| Neural networks | take messy input and extract useful structure |
+
+Both need outputs to depend on many parts of the input. A cipher wants a tiny input change to scramble the output. A neural network wants information from different input parts to interact so it can build higher-level features.
+
+The key difference is differentiability.
+
+Neural networks are designed so gradient descent can find useful changes:
+
+* residual connections preserve a learnable path,
+* normalization stabilizes scale,
+* smooth activations keep gradients useful,
+* backpropagation assigns credit through the computation.
+
+Cryptographic systems are designed to resist this kind of useful gradient-like structure. Differential cryptanalysis studies how input differences affect output differences; a good cipher tries to make those differences hard to exploit.
+
+This analogy is useful but should not be overstated. It is a mental model for layered mixing, not a claim that LLMs are ciphers or that cryptographic security transfers to ML.
+
+Interview framing:
+
+> Neural networks and ciphers both compose many mixing operations, but they optimize opposite goals. Ciphers destroy exploitable structure; neural networks learn to extract structure. The reason neural networks can be trained is that their mixing remains differentiable enough for gradient descent.
+
+## 7.2 Reversible Networks and Activation Rematerialization
+
+Training large networks requires storing activations from the forward pass so the backward pass can compute gradients.
+
+Memory pressure often looks like:
+
+```text
+forward pass:
+  compute layer activations
+  store activations for backward
+
+backward pass:
+  read activations
+  compute gradients
+```
+
+For deep models, activation memory can become a major bottleneck.
+
+One way to reduce this is activation rematerialization:
+
+```text
+do not store every activation
+recompute some activations during backward
+```
+
+This trades compute for memory.
+
+Reversible networks take this idea further. They design layers so inputs can be reconstructed from outputs. A simple reversible block has the flavor:
+
+```text
+x, y -> x, y + f(x)
+```
+
+Given the output, you can recover:
+
+```text
+x = x
+y = (y + f(x)) - f(x)
+```
+
+This resembles a Feistel-style construction from cryptography: use a function that does not need to be invertible by itself, but wrap it in a structure that makes the whole block invertible.
+
+Why it matters:
+
+* fewer activations need to be stored,
+* memory footprint can drop during training,
+* backward pass may need extra compute to reconstruct states,
+* implementation complexity increases,
+* numerical stability and framework support matter.
+
+This is the opposite tradeoff from KV caching:
+
+```text
+KV cache:
+  spend memory to save compute during inference
+
+activation rematerialization:
+  spend compute to save memory during training
+```
+
+Interview framing:
+
+> Reversible layers and activation rematerialization are memory-saving training techniques. They avoid storing every activation by reconstructing or recomputing them during backward, trading extra compute for lower memory use.
+
 ---
 
 # 8. GPU and Systems Optimization Intuition

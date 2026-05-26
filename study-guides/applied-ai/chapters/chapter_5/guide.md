@@ -432,6 +432,401 @@ Different methods place the trainable capacity in different places. Some modify 
 
 > Where should optimization be allowed to change the model?
 
+### Top PEFT Techniques
+
+The main PEFT methods differ by **where** they add trainable parameters.
+
+Full fine-tuning says:
+
+```text
+update the model weights directly
+```
+
+PEFT methods say:
+
+```text
+freeze most or all base weights
+add a small trainable path
+let that path steer behavior
+```
+
+That small path can live inside weight matrices, inside attention state, near the input embeddings, or as scaling vectors over internal activations.
+
+#### LoRA: Low-Rank Adaptation
+
+LoRA is the most widely used PEFT method because it gives a strong cost-to-quality tradeoff and is easy to deploy.
+
+The core idea is that a large weight update can often be approximated by a lower-rank update.
+
+Instead of training a full matrix update:
+
+```text
+W -> W + Delta W
+```
+
+LoRA freezes `W` and learns:
+
+```text
+Delta W = A B
+```
+
+where `A` and `B` are much smaller trainable matrices.
+
+If the original matrix is large, this can reduce trainable parameters dramatically. The exact savings depend on the layer size and chosen rank, but the practical effect is often that you train a small fraction of the parameters instead of the whole model.
+
+For a weight matrix:
+
+```text
+W has shape d_out x d_in
+```
+
+full fine-tuning can update:
+
+```text
+d_out * d_in parameters
+```
+
+LoRA learns two smaller matrices:
+
+```text
+A has shape d_out x r
+B has shape r x d_in
+```
+
+so the trainable parameter count is:
+
+```text
+r * (d_out + d_in)
+```
+
+where `r` is the rank. When `r` is much smaller than `d_in` and `d_out`, the adapter is much cheaper than the original matrix.
+
+The mental model:
+
+```text
+base model knows the broad capability
+LoRA learns a small direction for the task/domain/style shift
+```
+
+LoRA is often applied to attention projection matrices such as query, key, value, or output projections, and sometimes to MLP layers. The rank is a capacity knob:
+
+* lower rank means cheaper and more constrained,
+* higher rank means more adaptation capacity but more memory and overfitting risk.
+
+Common target modules include:
+
+* **query/value projections**, when the adaptation mostly needs to change what the model attends to and how it retrieves information from context,
+* **all attention projections**, when the task needs a broader change to attention behavior,
+* **MLP/up/down projections**, when the adaptation needs more capacity to change internal transformations,
+* **output heads or task-specific layers**, in smaller or specialized architectures.
+
+Choosing target modules is a real modeling decision. Training LoRA only on `q_proj` and `v_proj` is cheaper and often works well. Training LoRA on attention and MLP layers gives more capacity but increases memory, training time, and overfitting risk.
+
+Several practical knobs matter:
+
+* **rank (`r`)** controls adapter capacity,
+* **alpha** scales the LoRA update relative to the frozen base weights,
+* **dropout** can regularize the adapter,
+* **target layers** control where the model is allowed to change,
+* **merge behavior** determines whether the adapter stays separate or is folded into the base weights for inference.
+
+The deployment advantage is important. A team can keep one large frozen base model and load different LoRA adapters for different customers, domains, tasks, or experiments:
+
+```text
+base model
+  + support-ticket LoRA
+  + legal-formatting LoRA
+  + code-style LoRA
+```
+
+That is much cheaper than storing and serving three full model copies.
+
+LoRA is useful when the base model can already perform the task but needs targeted behavior change. It is weaker when the base model lacks the underlying capability or when the update needs broad changes across many behaviors.
+
+Failure modes:
+
+* the rank is too low, so the adapter cannot express the needed change,
+* the rank is too high, so the adapter overfits a narrow dataset,
+* the wrong layers are targeted, so the update has capacity in the wrong place,
+* the adapter is paired with the wrong base model or tokenizer,
+* the adapter learns formatting/style while factual quality does not improve,
+* multiple adapters interact poorly if composed without validation.
+
+Interview framing:
+
+> LoRA is a constrained way to fine-tune. Instead of updating a full weight matrix, it freezes the base matrix and learns a low-rank delta. That reduces trainable parameters, optimizer state, and checkpoint size. The key tradeoff is capacity: low-rank updates are efficient, but the rank and target modules determine whether the adapter can express the behavior change.
+
+#### Prefix Tuning
+
+Prefix tuning does not primarily change the model's normal weights.
+
+Instead, it learns extra continuous vectors that are inserted into the attention mechanism as a prefix. You can think of these vectors as learned "virtual tokens" that every layer can attend to.
+
+In a transformer attention layer, the model forms keys and values from the input. Prefix tuning adds trainable prefix keys and values:
+
+```text
+attention over:
+  learned prefix keys/values
+  + normal prompt keys/values
+```
+
+The base model stays frozen. The learned prefix changes what information is available inside attention, which can steer the model toward a task, style, or domain.
+
+The intuition:
+
+```text
+Instead of rewriting the model,
+learn a task-specific attention context that the model carries through generation.
+```
+
+Prefix tuning is more expressive than plain text prompting because the prefix vectors are continuous learned parameters, not human-readable tokens. It can be especially useful when you want task-specific behavior but want to keep one frozen base model.
+
+The important distinction is that prefix tuning conditions the model through the **attention path**, not by changing normal model weights. The learned prefix can be interpreted as persistent task-specific memory that the model can attend to at each layer.
+
+There are two ways to think about it:
+
+```text
+human prompt:
+  readable instructions in token space
+
+prefix tuning:
+  learned instructions in attention-state space
+```
+
+In many formulations, the prefix is not just added once at the input. Learned key/value vectors can be supplied to multiple transformer layers, which gives the prefix a deeper influence than a short natural-language instruction at the front of the prompt.
+
+This makes prefix tuning attractive when:
+
+* the task can be represented as a reusable conditioning pattern,
+* you want to avoid changing base weights,
+* you want one adapter-like object per task,
+* the model already has the relevant knowledge,
+* the desired change is more about behavior, formatting, or task framing than new facts.
+
+Example:
+
+```text
+base model:
+  general instruction-following model
+
+prefix:
+  task-specific attention context for summarizing legal contracts
+
+result:
+  same base model behaves as if it has a learned task instruction
+```
+
+Prefix length is the main capacity knob. A longer prefix gives the adapter more room to encode task information, but it also increases attention work and can reduce effective context budget.
+
+The tradeoff is that prefix tuning consumes effective context/attention capacity and may be less straightforward to merge into the base model than LoRA-style weight deltas. It can also be harder to inspect because the learned prefix is not readable text.
+
+Failure modes:
+
+* the prefix is too short to encode the task,
+* the prefix is too long and wastes context or attention capacity,
+* the learned conditioning overfits the training format,
+* the base model ignores or underuses the prefix,
+* the prefix steers style but not correctness,
+* serving infrastructure does not handle prefix KV state efficiently.
+
+Interview framing:
+
+> Prefix tuning freezes the model and learns continuous key/value-like prefixes that condition attention. It is like giving the model learned task context at the attention level. It is more powerful than a hand-written prompt but usually less like a weight update than LoRA. The main tradeoff is cheap modular adaptation versus extra attention/context overhead and limited interpretability.
+
+#### Prompt Tuning and P-Tuning
+
+Prompt tuning and P-tuning also learn prompt-like parameters, but they usually operate closer to the input side of the model.
+
+Instead of hand-writing a prompt like:
+
+```text
+You are a helpful assistant. Answer in JSON.
+```
+
+prompt tuning learns soft prompt embeddings:
+
+```text
+[learned embedding 1, learned embedding 2, ...] + user input
+```
+
+These learned embeddings are continuous vectors. They do not need to correspond to real vocabulary tokens.
+
+The mental model:
+
+```text
+hard prompt: human-written text tokens
+soft prompt: trainable embedding vectors
+```
+
+Prompt tuning is usually very parameter-efficient because only the soft prompt is trained. That makes it cheap and modular, but also limits how much behavior it can change. It tends to work better when the base model is large and already instruction-capable.
+
+Prompt tuning is closest in spirit to normal prompting:
+
+```text
+normal prompting:
+  choose discrete tokens by hand
+
+prompt tuning:
+  optimize continuous prompt embeddings with gradient descent
+```
+
+The model sees the learned embeddings as part of the input sequence. During training, the base model stays frozen and gradients update only the prompt embeddings. The prompt becomes a small learned artifact that can be stored and loaded for a task.
+
+This is very cheap:
+
+```text
+trainable parameters =
+  number of soft prompt tokens * embedding dimension
+```
+
+For a large model, that can be tiny compared with LoRA or full fine-tuning.
+
+Prompt tuning works best when:
+
+* the base model is large and already capable,
+* the task is mostly about eliciting existing behavior,
+* the desired output format is consistent,
+* the training data is task-specific but not huge,
+* you need many tiny task adapters.
+
+It is weaker when:
+
+* the model needs new domain knowledge,
+* the task requires deep behavior change,
+* the base model is small or not instruction-tuned,
+* the input format varies widely,
+* the prompt must compete with long user context.
+
+The main intuition:
+
+```text
+Prompt tuning does not teach the model much new behavior.
+It learns how to ask the frozen model for the behavior it already has.
+```
+
+P-tuning is a related family of methods that improves the expressiveness of learned prompts, often by using learned prompt encoders or placing trainable prompt representations in ways that better condition the model. The exact variants differ, but the shared idea is:
+
+```text
+learn the conditioning signal
+instead of manually writing the conditioning text
+```
+
+P-tuning can be thought of as making soft prompts less shallow. Instead of treating the learned prompt as a simple list of free embedding vectors, P-tuning methods may generate or structure those vectors with a small neural module. The goal is to make the prompt representation more expressive and easier to optimize.
+
+P-tuning v2-style approaches also made prompt learning more competitive across model sizes and tasks by applying trainable prompt-like parameters more deeply, rather than relying only on a few input embeddings.
+
+The practical distinction:
+
+```text
+prompt tuning:
+  learn soft tokens near the input
+
+P-tuning:
+  learn a richer prompt-conditioning mechanism
+```
+
+These methods are good for lightweight task adaptation. They are less suitable when the target behavior requires deep changes to internal reasoning or domain knowledge.
+
+Failure modes:
+
+* the learned prompt overfits to narrow templates,
+* performance collapses when inputs differ from training examples,
+* the soft prompt is hard to interpret or debug,
+* the model treats learned prompt capacity as style conditioning rather than task understanding,
+* prompt length eats into useful context,
+* prompt embeddings are brittle across model/tokenizer changes.
+
+Interview framing:
+
+> Prompt tuning learns continuous prompt embeddings while freezing the model. It is extremely parameter-efficient, but it mostly learns how to condition a capable base model rather than how to rewrite the model. P-tuning makes prompt learning more expressive with richer prompt representations or deeper prompt conditioning. These methods are lightweight, but they usually have less adaptation capacity than LoRA.
+
+#### IA3
+
+IA3 stands for "Infused Adapter by Inhibiting and Amplifying Inner Activations."
+
+The key idea is even more constrained than LoRA. Instead of adding low-rank matrices, IA3 learns small vectors that scale internal activations.
+
+Conceptually:
+
+```text
+activation -> learned scale vector * activation
+```
+
+Those learned vectors can scale parts of the attention or feedforward computation. The model's large weight matrices stay frozen, and the adapter learns which internal channels to amplify or suppress for the target task.
+
+The intuition:
+
+```text
+LoRA changes directions in weight space.
+IA3 changes the strength of existing internal features.
+```
+
+This can be extremely parameter-efficient because scaling vectors are tiny compared with full matrices. The cost is lower capacity: IA3 can steer existing features, but it has less room to create new transformations than LoRA.
+
+IA3 is easiest to understand as feature gating.
+
+The frozen base model already computes many internal features. IA3 does not add a large new transformation. It learns which existing channels should matter more or less for a task:
+
+```text
+existing feature channel
+  -> amplify it
+  -> suppress it
+  -> leave it mostly unchanged
+```
+
+That means IA3 is closer to:
+
+```text
+select and rescale existing behavior
+```
+
+than:
+
+```text
+learn a new behavior from scratch
+```
+
+In transformer terms, IA3 can scale activations associated with attention and feedforward layers. Because the learned objects are vectors rather than matrices, the trainable parameter count is extremely small.
+
+This gives IA3 several practical advantages:
+
+* very small adapter checkpoints,
+* low optimizer memory,
+* fast training,
+* easy storage for many tasks,
+* reduced risk of catastrophic forgetting because the base model is frozen,
+* simple mental model for task-specific feature emphasis.
+
+It also creates a clear limitation. If the base model does not already contain useful features for the task, scaling existing activations may not be enough. LoRA can add a low-rank transformation; IA3 mostly changes the intensity of existing transformations.
+
+IA3 is attractive when you want very small adapters, many task-specific variants, or low training overhead. It is less attractive when the adaptation needs substantial representational change.
+
+Failure modes:
+
+* the task requires new transformations, not just feature reweighting,
+* the base model lacks the relevant latent capability,
+* learned scales overfit to spurious channels,
+* the adapter is too constrained for complex domain adaptation,
+* performance is sensitive to which activations are scaled.
+
+Interview framing:
+
+> IA3 freezes the base model and learns small vectors that scale internal activations. It is extremely parameter-efficient because it trains vectors rather than matrices. The tradeoff is capacity: IA3 can amplify or suppress existing features, but it has less ability than LoRA to add new task-specific transformations.
+
+#### Comparing the Methods
+
+| Method | What is trained | Where it acts | Strength | Main limitation |
+| ------ | --------------- | ------------- | -------- | --------------- |
+| LoRA | low-rank adapter matrices | usually attention/MLP weights | strong general PEFT baseline | rank and target-layer choices matter |
+| Prefix tuning | learned prefix keys/values | attention state | expressive learned context | consumes attention/context capacity |
+| Prompt tuning | soft prompt embeddings | input embedding sequence | extremely lightweight | limited adaptation capacity |
+| P-tuning | learned prompt representations, sometimes with prompt encoders | input or prompt-conditioning path | more expressive prompt adaptation | variant-specific complexity |
+| IA3 | learned activation-scaling vectors | attention/MLP activations | tiny adapters, cheap multitask variants | lower capacity than LoRA |
+
+Interview framing:
+
+> LoRA, prefix tuning, prompt tuning, P-tuning, and IA3 are all PEFT methods, but they constrain learning in different places. LoRA learns low-rank weight updates, prefix tuning learns attention prefixes, prompt tuning learns soft input embeddings, P-tuning learns richer prompt-conditioning representations, and IA3 learns vectors that scale internal activations. The common goal is to adapt a mostly frozen base model cheaply while reducing optimizer memory, checkpoint size, and catastrophic-forgetting risk.
+
 ### When PEFT / LoRA Is Useful
 
 Use LoRA or PEFT when:
@@ -519,7 +914,144 @@ Chapter 9 covers this engineering side: registries, artifact lineage, serving ad
 
 > PEFT methods like LoRA freeze the base model and train a small constrained update. LoRA represents the update to a weight matrix with low-rank adapter matrices, which reduces trainable parameters and optimizer memory. It is useful for targeted domain or behavior adaptation when the base model is already capable. It still needs eval gates because it can overfit, regress safety, or fail if the adapter is paired with the wrong base model.
 
-## 4.6 Online Learning
+## 4.6 Training, RL, and Inference Compute Economics
+
+A model is not optimized only for pretraining loss.
+
+A deployed model is part of an economic loop:
+
+```text
+pretraining compute
+  -> post-training / RL compute
+  -> inference compute
+  -> user value
+```
+
+A useful mental model is total compute:
+
+$$
+C_{\text{total}} =
+C_{\text{pretrain}} + C_{\text{RL}} + C_{\text{inference}}
+$$
+
+For dense matrix multiplies, a rough pretraining estimate is:
+
+$$
+C_{\text{pretrain}} \approx 6 \cdot N_{\text{active}} \cdot D_{\text{pretrain}}
+$$
+
+The factor of 6 is a standard back-of-the-envelope:
+
+* about 2 FLOPs per parameter-token for the forward pass,
+* about 4 more for the backward pass,
+* total forward plus backward $\approx 6$.
+
+Inference is forward-only:
+
+$$
+C_{\text{inference}} \approx
+2 \cdot N_{\text{active}} \cdot D_{\text{inference}} \cdot \text{inefficiency}
+$$
+
+The inefficiency term matters because decode can have much lower hardware utilization than prefill or training. A token generated one at a time may be memory-bandwidth-bound even when the hardware has enormous peak FLOPs.
+
+RL and post-training sit between the two:
+
+$$
+C_{\text{RL}} \approx
+(2 \text{ to } 6)
+\cdot N_{\text{active}}
+\cdot D_{\text{RL}}
+\cdot \text{inefficiency}
+$$
+
+The range exists because RL workloads may require:
+
+* forward-only rollout generation,
+* reward model scoring,
+* policy updates on some subset of rollouts,
+* expensive decode with lower utilization,
+* environment or tool execution around the model.
+
+### Why Models May Be Trained Beyond Chinchilla
+
+The original Chinchilla-style intuition asks:
+
+```text
+Given a fixed pretraining compute budget,
+what model size and token count minimize loss?
+```
+
+But a deployed frontier model asks a broader question:
+
+```text
+Given pretraining + RL + inference cost,
+what model gives the best user value per total dollar?
+```
+
+That can favor training a smaller or sparser model on many more tokens than a pure pretraining-optimal rule would suggest. More training can make the model cheaper or better at inference time, and inference may dominate the lifetime cost if the model serves enough users.
+
+A simple heuristic is cost equalization:
+
+```text
+if one stage is much more expensive than the others,
+move effort to the stage that reduces it
+```
+
+For many power-law-like tradeoffs, the rough optimum is often near the point where major costs are of the same order.
+
+This does not mean the costs are exactly equal in practice. Labs have private scaling curves, deployment forecasts, hardware constraints, model-family plans, and risk estimates. The useful interview point is that pretraining token count is no longer only about the pretraining run. It is also about expected post-training and inference usage.
+
+### RL Compute Has a Hidden Decode Cost
+
+RL for LLMs is not just a normal training loop.
+
+It often includes:
+
+```text
+sample prompts
+  -> generate rollouts
+  -> score with reward/verifier/environment
+  -> update policy
+  -> evaluate
+```
+
+The rollout generation can be expensive because it uses autoregressive decode. Decode may have lower model FLOPs utilization than training because each token is sequential and memory-bound.
+
+That means a million RL tokens can cost more wall-clock time or hardware rental than a million pretraining tokens, depending on batching, context length, reward-model calls, and environment cost.
+
+Interview framing:
+
+> I would not compare pretraining, RL, and inference only by token counts. Pretraining uses efficient forward/backward passes over large batches. RL may include inefficient decode, reward scoring, and partial training on rollouts. Inference is forward-only but often memory-bandwidth-bound during decode.
+
+### Product Traffic Feeds Back Into Training Strategy
+
+If a model will serve enormous traffic, inference cost matters enough to change training strategy.
+
+For example:
+
+```text
+model used by few users
+  -> pretraining cost may dominate
+
+model used by millions of users
+  -> inference cost can dominate lifetime economics
+```
+
+This explains why production teams care about:
+
+* smaller active parameter counts,
+* MoE sparsity,
+* distillation,
+* quantization,
+* long-context efficiency,
+* output length control,
+* routing easy requests to cheaper models,
+* training more if it reduces inference cost or improves task success.
+
+The model is not just a checkpoint. It is a capital asset that must be amortized through deployment.
+
+## 4.7 Online Learning
 
 Online learning updates behavior as new data arrives.
 
@@ -542,7 +1074,7 @@ For LLMs, full online weight updates are less common because safety, regression 
 * collecting preference data for batch post-training
 * using bandits to choose among model variants
 
-## 4.7 Continual Learning
+## 4.8 Continual Learning
 
 Continual learning means updating a model over time while preserving previous capabilities.
 
@@ -560,7 +1092,7 @@ Common mitigation patterns:
 
 Continual learning is not just "train again." It is controlled change management for model behavior.
 
-## 4.8 Self-Improvement Loops
+## 4.9 Self-Improvement Loops
 
 A self-improvement loop uses the model or system to generate training candidates, critique outputs, solve tasks, create synthetic data, or propose refinements.
 
@@ -583,7 +1115,7 @@ Self-improvement loops need external anchors:
 * held-out evaluations
 * production outcome checks
 
-## 4.9 Learning Loop Operations
+## 4.10 Learning Loop Operations
 
 The algorithm is only one part of the learning loop. In deployed systems, most of the work is operational:
 

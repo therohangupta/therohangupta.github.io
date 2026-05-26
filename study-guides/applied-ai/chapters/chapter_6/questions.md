@@ -282,3 +282,43 @@ Chunked prefill splits long prompt processing into smaller pieces so one long pr
 It is useful when prefill and decode have different resource needs or interfere with each other under mixed traffic. Prefill workers can be optimized for compute-heavy prompt processing, while decode workers can be optimized for memory-bandwidth-heavy token generation. The benefit is independent scaling and less interference; the cost is more complex scheduling, KV-cache transfer, and new failure modes.
 
 ---
+
+## Question 28
+
+**How would you use a roofline-style model to reason about LLM serving cost?**
+
+### Sample Answer
+
+I would compare compute time with memory time and treat latency as roughly the max of the two. Compute time scales with batch size and active parameters, while memory time includes reading model weights and reading KV cache for each active sequence. Batching amortizes weight reads, but compute and KV-cache reads still scale with tokens. This explains why cost per token improves with batching at first and then flattens.
+
+---
+
+## Question 29
+
+**Why is there a lower bound on decode latency even with small batches?**
+
+### Sample Answer
+
+The system still has to read model weights and cached attention state from memory. Memory bandwidth is finite, so a forward pass cannot complete faster than the required memory movement allows. This is why simply reducing batch size cannot make latency arbitrarily small; it may reduce queueing, but it also worsens cost because weight reads are amortized over fewer tokens.
+
+---
+
+## Question 30
+
+**Why are output tokens often more expensive than input tokens?**
+
+### Sample Answer
+
+Input tokens are usually processed in prefill, where many positions can be processed in parallel and weight reads are better amortized. Output tokens are generated during decode, one step at a time, and each step reads model weights and KV cache while producing only one new token per sequence. Decode is often memory-bandwidth-bound and has lower hardware utilization, so output tokens cost more.
+
+---
+
+## Question 31
+
+**How should a serving system decide whether to store or rematerialize KV cache?**
+
+### Sample Answer
+
+It should compare expected reuse value against storage and retrieval cost. Hot prefixes may be worth keeping in HBM or host memory; warm prefixes may fit slower memory tiers; cold prefixes are often cheaper to recompute from token IDs. Rematerialization spends compute to save memory, while KV caching spends memory to save compute. The right choice depends on reuse probability, cache duration, memory tier bandwidth, and whether stored KV crowds out active serving work.
+
+---

@@ -442,6 +442,206 @@ Interview framing:
 
 > I would reason about LLM serving by separating prefill and decode. Prefill is prompt processing and initial KV-cache construction; decode is sequential token generation and KV-cache reading. Optimizations like chunked prefill, prefix caching, PagedAttention, continuous batching, KV quantization, speculative decoding, and disaggregated prefill/decode each target a different bottleneck.
 
+### Quantitative Serving Math: Roofline Intuition
+
+A useful first-pass model for one forward pass is:
+
+$$
+T = \max(t_{\text{compute}}, t_{\text{mem}})
+$$
+
+The system is limited by whichever is slower: math or memory movement.
+
+Ignoring attention compute for a simple estimate:
+
+$$
+t_{\text{compute}} = \frac{B \cdot N_{\text{active}}}{\text{FLOPs}}
+$$
+
+Where:
+
+* $B$ is batch size,
+* $N_{\text{active}}$ is the number of parameters active for a token,
+* FLOPs is hardware compute throughput.
+
+Memory time has two main pieces:
+
+$$
+t_{\text{mem}} =
+\frac{N_{\text{total}} + B \cdot L_{\text{ctx}} \cdot \text{KV}_{\text{bytes/token}}}{\text{mem\_bw}}
+$$
+
+Where:
+
+* $N_{\text{total}}$ is the total model weight footprint that must be read,
+* $L_{\text{ctx}}$ is context length,
+* $\text{KV}_{\text{bytes/token}}$ is KV-cache storage per token,
+* $\text{mem\_bw}$ is memory bandwidth.
+
+This simple equation explains several production facts:
+
+* small batches are expensive because weight reads are not amortized,
+* larger batches improve cost per token until compute or KV-cache reads dominate,
+* decode is often memory-bandwidth-bound,
+* long context becomes expensive because KV-cache reads grow with context length,
+* output tokens are often more expensive than input tokens because decode cannot parallelize over many positions like prefill.
+
+The key distinction:
+
+```text
+weight fetches can be amortized across a batch
+KV cache fetches cannot be amortized in the same way because each sequence has its own context
+compute cannot be eliminated because each token needs its own matrix multiplies
+```
+
+Interview framing:
+
+> I would model an LLM forward pass with a roofline-style max of compute time and memory time. Batching amortizes weight reads, but KV-cache reads still grow with batch and context, which is why cost curves flatten instead of improving forever.
+
+### Batch Size, Latency, and Cost Curves
+
+As batch size increases:
+
+* compute time grows roughly linearly,
+* KV-cache memory time grows roughly linearly,
+* weight-fetch memory time is mostly fixed for the forward pass.
+
+Latency has a lower bound because the active serving hardware still has to read the model weights. You cannot push latency to zero by making batch size tiny.
+
+Cost per token behaves differently because cost is roughly time divided by tokens served:
+
+```text
+cost per token = serving time / batch size
+```
+
+When batch size is small, the cost per token is high because each token pays for reading the weights. As batch size grows, the weight read is shared across more tokens. Eventually cost stops improving because compute and KV-cache work are per-token.
+
+This explains "fast mode" and "slow mode" product behavior:
+
+* fast mode may use smaller batches or higher-priority scheduling, improving latency at higher cost,
+* slow mode can wait for larger batches, reducing cost up to a point,
+* after the weight reads are already amortized, waiting longer does not make decode free.
+
+### Optimal Batch Size Heuristic
+
+A useful heuristic comes from setting compute time equal to weight-fetch memory time and ignoring KV cache:
+
+$$
+\frac{B \cdot N_{\text{active}}}{\text{FLOPs}}
+=
+\frac{N_{\text{total}}}{\text{mem\_bw}}
+$$
+
+Solving for batch size:
+
+$$
+B =
+\frac{\text{FLOPs}}{\text{mem\_bw}}
+\cdot
+\frac{N_{\text{total}}}{N_{\text{active}}}
+$$
+
+Modern accelerators often have a rough ratio on the order of hundreds of low-precision operations per byte of memory bandwidth. If the ratio is approximately 300, then:
+
+```text
+optimal batch size is on the order of
+300 * (total parameters / active parameters)
+```
+
+For a sparse MoE model, total parameters may be much larger than active parameters. That means a very sparse model can require larger batches to fully amortize weight movement.
+
+This is not an exact serving formula. Real systems have attention kernels, routing, network communication, tokenizer overhead, scheduler behavior, and nonideal utilization. But it gives the right shape:
+
+```text
+more sparsity -> lower active compute
+more sparsity -> more total weights
+therefore -> larger batch needed to amortize weight reads
+```
+
+### HBM Drain Time and the Train Schedule
+
+Another useful serving mental model is the "train schedule."
+
+An inference engine repeatedly launches batches through the model. A practical cadence is shaped by how long it takes to read a large fraction of high-bandwidth memory:
+
+$$
+\text{drain time} \approx \frac{\text{HBM capacity}}{\text{HBM bandwidth}}
+$$
+
+For modern accelerator systems, this can land around tens of milliseconds.
+
+Mental model:
+
+```text
+every ~t milliseconds:
+  a batch "train" departs
+  ready sequences board
+  the model produces one decode token per sequence
+```
+
+If the train leaves too frequently, it cannot read the required memory fast enough. If it leaves too slowly, expensive compute sits idle.
+
+This gives a lower bound on inter-token latency for a given serving configuration. It also explains why extremely low latency is hard: even perfect scheduling cannot bypass memory bandwidth.
+
+### Reading API Prices as Cost Clues
+
+Public API pricing often leaks serving economics.
+
+Useful clues:
+
+* **Output tokens cost more than input tokens:** decode is less efficient than prefill because it generates one token at a time and often waits on memory.
+* **Long-context price jumps:** the provider may cross from compute-bound to KV-cache-memory-bound at long context lengths.
+* **Cached input tokens are cheaper:** reading or reusing stored prefix state can be cheaper than recomputing the full prefix.
+* **Different cache durations have different prices:** the provider may be using different memory or storage tiers.
+
+You should not overfit to exact public prices, but you can infer the qualitative bottleneck:
+
+```text
+cheap prefill + expensive decode
+  -> decode is memory-bandwidth constrained
+
+price jump above long-context threshold
+  -> KV-cache memory bandwidth/capacity is now material
+
+cheap cached tokens
+  -> rematerializing KV is more expensive than retrieving stored KV
+```
+
+### KV Cache Memory Tiers
+
+There are two ways to recover prefix state:
+
+1. **Rematerialize:** recompute KV cache from token IDs.
+2. **Retrieve:** store KV cache somewhere and load it later.
+
+Memory tiers create different tradeoffs:
+
+| Tier | Mental model | Good for | Risk |
+| ---- | ------------ | -------- | ---- |
+| HBM | fastest device memory | very hot active prefixes | expensive capacity |
+| Host DDR | slower but larger memory | warm reusable prefixes | transfer latency |
+| Flash/object storage | cheap durable storage | longer-lived cache entries | slow retrieval |
+| Rematerialization | recompute from tokens | cold or uncertain reuse | burns GPU compute |
+
+A useful decision rule:
+
+```text
+store if expected reuse value > hold cost + retrieval cost
+rematerialize if reuse is unlikely or storage would crowd out active work
+```
+
+For short-lived active conversations, HBM or host memory may make sense. For long-lived cache entries, slower tiers may be cheaper, but retrieval latency matters. For rarely reused prefixes, recomputation may be cheaper than paying to hold cached state.
+
+This is the same memory/compute tradeoff seen elsewhere:
+
+```text
+KV cache:
+  spend memory to save compute
+
+activation rematerialization:
+  spend compute to save memory
+```
+
 ## 4.2 Request Router
 
 The router decides where a request goes.

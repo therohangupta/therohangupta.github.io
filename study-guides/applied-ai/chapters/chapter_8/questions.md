@@ -252,3 +252,23 @@ Emergent abilities appear when a model crosses a scale where it can represent an
 MLA changes the attention representation so the model can cache a compressed latent form rather than full key/value state. Architecturally, this changes how attention information is represented and reconstructed. Operationally, it targets a serving bottleneck: long-context decoding can become dominated by KV-cache memory and memory bandwidth. The tradeoff is lower cache pressure at the cost of more model complexity and reconstruction work.
 
 ---
+
+## Question 25
+
+**What is the analogy between neural networks and cryptography?**
+
+### Sample Answer
+
+Both neural networks and cryptographic systems mix information across many layers so outputs depend on many parts of the input. Their goals are opposite: cryptography tries to turn structured input into output that looks random, while neural networks try to extract useful structure from messy input. Neural networks must remain differentiable enough for gradient descent, whereas cryptographic systems are designed to resist exploitable structure such as predictable input-output differences.
+
+---
+
+## Question 26
+
+**What problem do reversible networks and activation rematerialization solve?**
+
+### Sample Answer
+
+They reduce training memory. Standard backpropagation stores forward activations so the backward pass can compute gradients. Activation rematerialization recomputes some activations instead of storing them. Reversible networks design layers so earlier states can be reconstructed from later states. Both trade extra compute and implementation complexity for lower activation memory.
+
+---
