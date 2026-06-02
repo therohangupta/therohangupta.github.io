@@ -1,20 +1,25 @@
 ---
 layout: page
-title: "System Design Code Examples"
+title: "Chapter 7 Examples: Production ML Systems"
 guide_type: examples
 ---
-# System Design Code Examples
 
-These examples accompany the [System Design guide](guide.html). Use the raw links to download or run them locally.
+# Chapter 7 Examples
+
+These examples accompany the [Production ML Systems guide](guide.html). Use the raw links to download or run them locally.
 
 ---
 
-{% include code-example.html title="Architecture Sketch" path="examples/architecture_sketch.md" language="markdown" %}
+{% include code-example.html title="Batching Queue Example" path="examples/batching_queue_example.py" language="python" %}
 
-{% include code-example.html title="Failure Debugging Walkthrough" path="examples/failure_debugging_walkthrough.md" language="markdown" %}
+{% include code-example.html title="Caching Example" path="examples/caching_example.py" language="python" %}
 
-{% include code-example.html title="Product Specific Design" path="examples/product_specific_design.md" language="markdown" %}
+{% include code-example.html title="Deployment Config Sketch" path="examples/deployment_config_sketch.yaml" language="yaml" %}
 
-{% include code-example.html title="Request Lifecycle" path="examples/request_lifecycle.md" language="markdown" %}
+{% include code-example.html title="Minimal Inference Service" path="examples/minimal_inference_service.py" language="python" %}
 
-{% include code-example.html title="Request Pipeline" path="examples/request_pipeline.py" language="python" %}
+{% include code-example.html title="Streaming Response Example" path="examples/streaming_response_example.py" language="python" %}
+
+{% include code-example.html title="LLM Latency Incident Walkthrough" path="examples/latency_incident_walkthrough.md" language="markdown" %}
+
+{% include code-example.html title="Inference Capacity Sizing Exercise" path="examples/inference_capacity_sizing.md" language="markdown" %}

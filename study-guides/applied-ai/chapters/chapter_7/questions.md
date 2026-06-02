@@ -1,11 +1,12 @@
 ---
 layout: page
-title: "System Design Practice Questions"
+title: "Chapter 7 Questions: Production ML Systems"
 guide_type: questions
 ---
+
 # Chapter 7 — Practice Questions
 
-Explanatory material for this chapter lives in `guide.md`.
+Explanatory material for this chapter lives in [`guide.md`](guide.html).
 
 ---
 
@@ -15,394 +16,378 @@ Explanatory material for this chapter lives in `guide.md`.
 
 ## Question 1
 
-**Design an enterprise AI agent platform that lets internal teams build agents over company data and tools.**
+**How would you design a production LLM inference service?**
 
 ### Sample Answer
 
-I would start by separating the shared platform from individual agents. The shared platform would provide an API gateway, authentication, tenant and team isolation, an orchestration service, a model gateway, a retrieval service, a tool registry, a workflow engine, trace storage, eval infrastructure, and a human review console.
-
-Each agent would be a versioned configuration over:
-
-* prompt templates
-* allowed tools
-* retrieval sources
-* permission scopes
-* model routes
-* safety policies
-* eval suites
-* rollout flags
-
-The request path would be: client request enters the gateway, auth attaches user and tenant metadata, the orchestrator loads the agent configuration, retrieval fetches permission-filtered context, the model gateway calls the selected model, proposed tool calls are authorized by a policy engine, workers execute approved actions, and traces plus feedback are stored.
-
-The main architectural reasoning is that agent builders should not reimplement auth, tracing, tool permissions, or evals. The platform centralizes these controls while still letting teams customize product behavior.
-
-Important tradeoffs:
-
-* A generic platform improves reuse but can slow product-specific iteration.
-* Centralized tool governance improves safety but creates approval overhead.
-* Shared retrieval infrastructure reduces operational burden but requires strong tenant and document-level isolation.
-* Model routing saves cost but needs evals to prevent hard tasks from going to weak models.
-
-The biggest risks are permission leaks, unsafe tool execution, unclear ownership, and silent regressions across many agents. I would mitigate them with permission-aware retrieval, tool risk levels, prompt/version management, per-agent dashboards, offline eval gates, canary rollout, and kill switches for write tools.
+I would start by clarifying latency target, request rate, prompt and output length distribution, quality requirements, and cost constraints. Then I would put an API layer in front of a router, use cache where correctness allows it, batch requests through an inference engine such as vLLM or TGI, and instrument the whole path with metrics, logs, and traces. I would add timeouts, bounded retries, fallback models, circuit breakers, and canary deployment so failures degrade predictably.
 
 ---
 
 ## Question 2
 
-**Design a coding assistant that can answer questions about a repository, edit files, and run tests.**
+**What is the difference between latency and throughput in LLM serving?**
 
 ### Sample Answer
 
-I would design it as a stateful developer workflow system rather than a simple chat wrapper. The main components would be an editor client, API gateway or local agent runtime, repository indexer, context builder, model gateway, patch generator, sandboxed command runner, trace store, and eval pipeline.
-
-The repository indexer would build searchable representations of files, symbols, imports, diagnostics, recent edits, git history, and test metadata. The context builder would select relevant files and snippets based on the current cursor, user request, recently viewed files, search results, linter diagnostics, and prior tool output.
-
-For edits, I would prefer patch-based changes with small diffs. For command execution, I would use a sandbox with allowlists, timeouts, and clear user approval for risky commands. The assistant should store the prompt version, selected context, generated diff, commands run, command output, and final status.
-
-The request lifecycle:
-
-1. User asks for a change.
-2. System classifies the task as explanation, edit, debug, or command.
-3. Context builder retrieves relevant code.
-4. Model proposes a plan or patch.
-5. Patch is applied and diagnostics are checked.
-6. Tests or targeted commands run if appropriate.
-7. Trace and outcome are stored.
-
-The main tradeoff is context depth versus latency. Full-repo context is expensive and noisy; narrow context may miss important dependencies. I would use layered retrieval: open files and recent edits first, symbol search second, broader semantic search only when needed.
-
-Evaluation should include compile/test pass rate, task completion, edit minimality, user acceptance, unsafe command rate, and regression cases from previous failures.
+Latency is how long one request waits. Throughput is how much work the system completes per unit time. In LLM serving, throughput should often be measured in tokens per second rather than just requests per second because requests have very different prompt and output lengths. Batching can improve throughput while hurting latency, so the right choice depends on the product's SLO.
 
 ---
 
 ## Question 3
 
-**Design a customer support automation system that answers tickets and can perform limited account actions.**
+**Why is time to first token different from time to final token?**
 
 ### Sample Answer
 
-I would separate answering from acting. The system can draft grounded replies and recommend actions, but deterministic policy checks and human review should gate high-impact mutations.
-
-Architecture:
-
-* ticket ingestion service
-* API gateway and auth
-* classifier for ticket type, urgency, sentiment, and risk
-* retrieval over help center articles, policy docs, account metadata, and prior cases
-* context builder with citations and freshness metadata
-* model gateway for answer drafting
-* policy engine for action authorization
-* workflow engine for account actions
-* human review queue
-* trace, feedback, and eval storage
-
-For a refund request, the system would retrieve order data, refund policy, prior contact history, and account risk signals. The model would produce a recommended answer and action. The policy engine would check amount thresholds, eligibility, user permissions, duplicate refunds, and whether human approval is required. Only approved actions would execute.
-
-Metrics should include resolution rate, time to first response, escalation rate, reopen rate, customer satisfaction, human edit distance, policy violation rate, tool failure rate, and cost per resolved ticket.
-
-The biggest failure modes are stale policy retrieval, hallucinated promises, unsafe refunds, and over-automation of angry or legally sensitive tickets. I would mitigate these with citation validation, policy versioning, confidence thresholds, human review, action audit logs, and sampled QA.
+Time to first token includes routing, prompt construction, queueing, and prefill before the model can emit anything. Time to final token also includes the full decode loop for all generated output tokens. Streaming improves perceived latency by lowering the time before users see progress, but it does not necessarily reduce total compute.
 
 ---
 
 ## Question 4
 
-**Design a research copilot that searches sources, synthesizes findings, and cites claims.**
+**How does batching improve LLM serving performance?**
 
 ### Sample Answer
 
-I would design around provenance. The system should make it easy to inspect which source supports each claim.
-
-The architecture would include source connectors, ingestion workers, document parsers, an object store for raw documents, a metadata store, vector and keyword indexes, reranking, context assembly, a model gateway, citation validation, and feedback capture.
-
-The request lifecycle:
-
-1. User asks a research question.
-2. System decomposes the question into search intents.
-3. Search retrieves candidate sources.
-4. Reranker prioritizes sources by relevance, freshness, authority, and diversity.
-5. Context builder extracts evidence snippets with source IDs.
-6. Model synthesizes an answer with claim-level citations.
-7. Validator checks that cited sources were retrieved and that unsupported claims are reduced or flagged.
-8. User feedback on sources and answer quality is stored.
-
-The tradeoff is breadth versus faithfulness. Broad search improves recall but increases noise and latency. Narrow search improves precision but may miss important counterevidence. I would support iterative exploration where the user can inspect sources, ask follow-up questions, and request deeper search.
-
-Evaluation should include citation accuracy, claim support, source relevance, coverage of counterarguments, answer helpfulness, and latency.
+Batching lets the GPU process multiple requests together, which usually improves utilization and tokens per second. The tradeoff is queueing delay: a request may wait while the batch fills. For interactive systems, the batcher needs to balance hardware efficiency against latency SLOs.
 
 ---
 
 ## Question 5
 
-**Design a workflow automation agent that updates CRM records, sends emails, and creates follow-up tasks.**
+**What is continuous batching and why is it useful?**
 
 ### Sample Answer
 
-I would use a durable workflow engine rather than a single autonomous prompt loop. The model can interpret unstructured input and recommend next steps, but the workflow engine should own state transitions, retries, idempotency, and approval gates.
-
-Architecture:
-
-* trigger ingestion from email, webhook, or UI
-* classifier for workflow type
-* orchestrator
-* durable workflow engine
-* tool registry for CRM, email, calendar, and task systems
-* policy engine
-* human approval queue
-* relational database for workflow state
-* event queue for asynchronous steps
-* tracing and eval pipeline
-
-State should include workflow ID, current step, completed steps, pending approvals, retry counts, tool outputs, idempotency keys, and final status.
-
-For sending an email, the model may draft the content. Deterministic code should verify recipient domain, template constraints, user permissions, and whether approval is required. The send action should use an idempotency key so retries do not send duplicates.
-
-The biggest tradeoff is flexibility versus reliability. A free-form agent can handle surprising tasks but is hard to validate. A state-machine workflow is more reliable but less flexible. I would start with explicit workflows for common high-value processes and use the model inside bounded steps.
+Continuous batching updates the active batch as requests arrive and finish instead of waiting for a fixed batch to complete. This is useful for decoder-only LLMs because output lengths vary. Finished sequences can leave the batch and new sequences can enter, keeping the GPU busier and reducing waste.
 
 ---
 
 ## Question 6
 
-**How would you design memory and retrieval for an internal knowledge assistant with strict permissions?**
+**Why is KV-cache management important?**
 
 ### Sample Answer
 
-I would enforce permissions before the model sees content. The retrieval layer should filter documents by user, group, tenant, document ACLs, and possibly purpose of access.
-
-Storage would be split:
-
-* relational DB for users, groups, permissions, document metadata, and feedback
-* object store for raw documents
-* vector index for semantic chunks with document IDs and ACL metadata
-* keyword index for exact matching
-* cache for hot metadata and frequent retrieval results
-
-The ingestion pipeline would parse documents, chunk them, compute embeddings, attach source metadata, owner, freshness, and ACLs, then write to indexes. When a user asks a question, retrieval should apply ACL filters before returning chunks. The context builder should preserve citations and document freshness.
-
-For conflicting documents, the system should prefer authoritative and recent sources, flag conflicts, and expose source ownership. For sensitive categories, it should escalate or refuse rather than answer from ambiguous context.
-
-Failure modes include permission leakage, stale docs, contradictory answers, and prompt injection hidden inside retrieved documents. Mitigations include ACL-filtered retrieval, document trust scores, instruction/data separation, freshness metadata, doc-owner feedback, and audit logging.
+The KV cache stores attention state for previous tokens so decode does not recompute the whole sequence every step. It greatly improves inference speed, but it consumes GPU memory proportional to active sequences and sequence length. Poor KV-cache management can cause memory fragmentation, OOMs, reduced concurrency, or admission failures.
 
 ---
 
 ## Question 7
 
-**How would you debug a production incident where an AI assistant suddenly starts giving worse answers, but no service is down?**
+**When would you use a cache in an ML serving system?**
 
 ### Sample Answer
 
-I would treat it as a silent regression and compare traces.
-
-First I would define the failing behavior: what task, which users, which time window, and which metric changed. Then I would collect bad traces and nearby good traces. For each trace, I would compare request classification, prompt version, model route, retrieval query, retrieved documents, context assembly, model output, validation results, tool calls, and final answer.
-
-I would look for the first divergence:
-
-* new prompt version
-* model provider update
-* retrieval index refresh
-* document ingestion bug
-* changed feature flag
-* tool schema change
-* policy config change
-* distribution shift in user requests
-
-Once the likely cause is found, I would create an eval case from the failure before fixing it. Then I would roll back or patch the responsible layer, canary the fix, and monitor online metrics.
-
-The key reasoning is that AI failures often do not throw exceptions. Observability must preserve enough execution context to reconstruct what changed.
+I would use a cache when repeated work is common and the cached result is safe to reuse. Examples include embedding caches, retrieval caches, exact response caches, and prompt-prefix caches. I would be careful about cache keys, user identity, model version, prompt version, and invalidation because a wrong cache hit can leak data or serve stale behavior.
 
 ---
 
 ## Question 8
 
-**How would you prevent cost blowups in a multi-agent system?**
+**How can retries make an outage worse?**
 
 ### Sample Answer
 
-I would budget the system at multiple levels: per request, per user, per tenant, per workflow, and per tool loop.
-
-Controls:
-
-* model routing based on task complexity
-* small models for classification and routing
-* prompt and context token budgets
-* maximum agent iterations
-* maximum tool calls
-* retrieval result limits
-* retry budgets
-* cache for repeated context and retrieval
-* async batch jobs where latency is not critical
-* per-tenant quotas and alerts
-* circuit breakers when spend spikes
-
-I would measure cost per successful task, not just cost per request. A cheap answer that causes human rework may be more expensive than a stronger model call.
-
-The architecture should expose token usage, model cost, tool cost, retry counts, and latency by stage. Without stage-level metrics, cost optimization becomes guesswork.
-
-The tradeoff is that aggressive cost controls can reduce quality. I would protect high-risk workflows with stronger models and verification while optimizing low-risk high-volume paths.
+Retries can multiply load during overload. If requests time out and every client retries immediately, the system receives more traffic exactly when it is least able to handle it. Good retry design uses backoff with jitter, caps attempts, avoids retrying non-idempotent operations, and propagates cancellation when the original request is no longer needed.
 
 ---
 
 ## Question 9
 
-**How would you design rollout and rollback for prompt, model, retrieval, and tool changes?**
+**How would you choose between a small model and a large model in production?**
 
 ### Sample Answer
 
-I would version each layer independently.
-
-Prompts should have stable IDs, owners, changelogs, eval results, and rollout status. Models should be routed through a model gateway so traffic can shift by percentage, tenant, user group, task type, or feature flag. Retrieval configs should be versioned, including embedding model, chunking strategy, index snapshot, reranker, and filters. Tool schemas and policies should also be versioned because prompt behavior depends on tool interfaces.
-
-Rollout process:
-
-1. Run offline evals against relevant regression suites.
-2. Run shadow mode if possible.
-3. Canary to internal users or a small tenant slice.
-4. Monitor quality, safety, latency, and cost metrics.
-5. Expand gradually.
-6. Roll back the changed layer if regressions appear.
-
-Rollback should not require redeploying the whole application. For example, a bad prompt should be rolled back through prompt config, not a code revert. A bad model route should be changed at the gateway. A bad retrieval index should fall back to the previous snapshot.
-
-The risk is interaction effects: a new prompt may work with one tool schema but fail with another. That is why evals need to test realistic full workflows, not isolated prompts only.
+I would treat it as a routing and product tradeoff. A small model is usually faster and cheaper but may have lower quality. A large model may handle harder requests but increases latency and cost. A common design routes easy or low-risk traffic to the small model and escalates complex or high-value traffic to the larger model, with metrics tracking quality, latency, and cost by route.
 
 ---
 
 ## Question 10
 
-**How would you design safety and permissions for an agent that can use internal tools and external APIs?**
+**What metrics would you monitor for an LLM inference service?**
 
 ### Sample Answer
 
-I would not rely on prompt instructions as the permission boundary. Safety should be enforced by the application, policy engine, retrieval layer, and tool execution layer.
-
-Design:
-
-* authenticate user and tenant at ingress
-* map user to scopes and roles
-* filter retrieval by ACL before model exposure
-* register tools with risk levels and required scopes
-* validate tool arguments against schema and business rules
-* require human approval for high-impact or irreversible actions
-* use idempotency keys for side effects
-* log every decision and action
-* provide kill switches for write tools
-
-Tool risk should determine execution mode:
-
-* read-only tools can often execute directly with rate limits
-* draft tools can produce artifacts for review
-* write tools need policy checks
-* high-risk write tools need approval or deterministic execution only
-
-The core principle is least privilege. The agent should only see data and tools needed for the current task, and only for the current user context.
+I would monitor request rate, error rate, latency percentiles, time to first token, time to final token, queue wait time, prompt tokens, output tokens, tokens per second, GPU utilization, GPU memory utilization, KV-cache usage, cache hit rate, fallback rate, model version, and cost per request. Without token and route dimensions, latency and cost changes are hard to explain.
 
 ---
 
 ## Question 11
 
-**Design monitoring and observability for a production AI platform.**
+**What causes latency spikes in production ML systems?**
 
 ### Sample Answer
 
-I would combine standard service observability with AI-specific traces.
-
-Standard metrics:
-
-* request volume
-* error rate
-* latency percentiles
-* dependency health
-* queue depth
-* worker failures
-
-AI-specific metrics:
-
-* token usage
-* model cost
-* prompt version distribution
-* model route distribution
-* retrieval hit rate
-* reranker score distribution
-* tool-call success rate
-* validation failure rate
-* human override rate
-* escalation rate
-* task success
-* safety incidents
-
-A trace should connect the user request, classification, prompt version, model version, retrieved document IDs, assembled context or redacted context, tool calls, validation results, final answer, and feedback.
-
-For debugging, I would support trace comparison between good and bad examples. For privacy, I would redact sensitive values, restrict trace access, and set retention policies.
-
-The main tradeoff is debuggability versus privacy. The system needs enough information to explain behavior without storing unnecessary sensitive content forever.
+Common causes include traffic bursts, queue buildup, long prompts, long outputs, cold replicas, slow retrieval or database calls, GPU saturation, OOM recovery, bad batching behavior, and retries. I would use tracing to separate queue time, prefill time, decode time, dependency time, and postprocessing time.
 
 ---
 
 ## Question 12
 
-**You are designing an AI system for a high-stakes domain where wrong answers are costly. How does your architecture change?**
+**How would you deploy a new model version safely?**
 
 ### Sample Answer
 
-I would reduce autonomy, increase verification, and make uncertainty visible.
-
-Changes:
-
-* stronger identity and permission checks
-* authoritative retrieval sources only
-* stricter context construction
-* lower tolerance for unsupported claims
-* structured outputs with uncertainty and citations
-* deterministic validation
-* human review for ambiguous or high-impact cases
-* conservative fallback behavior
-* stronger audit logging
-* slower rollout
-* larger offline eval suites
-* incident review process
-
-The model should often draft or recommend rather than execute. If actions are allowed, they should be reversible where possible and gated by policy.
-
-The tradeoff is slower user experience and higher cost. That is acceptable when the cost of wrong automation is high. In interviews, I would explicitly tie autonomy level to reversibility, impact, and observability.
+I would version the model artifact, tokenizer, prompt, serving image, schema, and decoding parameters. Then I would run offline evaluation, shadow traffic if possible, canary a small percentage of production traffic, monitor quality and operational metrics, and keep rollback simple. Metrics should be segmented by model version so regressions are visible.
 
 ---
 
 ## Question 13
 
-**How would you choose between building a general AI agent platform and building one product-specific agent?**
+**What is a circuit breaker and how does it apply to model serving?**
 
 ### Sample Answer
 
-I would start from the workflows and ask how much is genuinely shared.
-
-A general platform is justified when multiple teams need the same primitives: auth, tool registry, retrieval, model gateway, tracing, evals, prompt management, human review, and rollout controls. It reduces duplication and improves governance.
-
-A product-specific agent is better when the workflow has unique UX, domain logic, latency requirements, or safety constraints. It can be optimized more aggressively and evaluated more directly.
-
-The risk of a platform is premature abstraction. Teams may spend months building generic agent infrastructure before proving any workflow creates value. The risk of product-specific agents is fragmentation: inconsistent permissions, poor observability, duplicated tool integrations, and no shared eval standards.
-
-My approach would be to build the first high-value workflow product-specifically, but factor out only the platform capabilities that become obviously repeated: model gateway, tracing, tool registry, retrieval connectors, and eval harness.
+A circuit breaker stops sending traffic to a dependency or model pool that appears unhealthy. In model serving, it can route away from replicas with high error rates, OOMs, or latency spikes. The fallback might be a different replica, smaller model, cached response, degraded feature, or clear error.
 
 ---
 
 ## Question 14
 
-**How would you design an eval loop for a top-layer AI product after launch?**
+**What is batching collapse?**
 
 ### Sample Answer
 
-I would build a loop that connects production traces to offline and online evaluation.
+Batching collapse happens when the system stops forming efficient batches, often because traffic is too bursty, request lengths are too heterogeneous, scheduler constraints are too strict, or memory pressure limits active sequences. The result is poor GPU utilization, lower tokens per second, and worse cost per token.
 
-Production logging captures request metadata, prompt version, model version, retrieval IDs, tool calls, validations, output, and user outcomes. A sampling job selects traces for human review based on failures, high-risk categories, low confidence, user dissatisfaction, and random sampling. Reviewers label correctness, faithfulness, safety, and task completion.
+---
 
-Those labels become:
+## Question 15
 
-* regression test cases
-* prompt improvement data
-* retrieval ranking feedback
-* model routing data
-* policy updates
-* product UX insights
+**How can cost explode in an LLM product?**
 
-Before each change, the system runs offline evals. During rollout, canaries monitor online metrics. After rollout, failures are added back into the eval set.
+### Sample Answer
 
-The key reasoning is that evals should evolve with production. A static benchmark quickly becomes less useful as user behavior, documents, tools, and models change.
+Cost can explode through long prompts, long outputs, retries, agent loops, low cache hit rates, routing too much traffic to large models, inefficient batching, abuse, and excessive logging. I would track token usage and cost by route, tenant, feature, and model version, then enforce quotas, context limits, and fallback policies.
+
+---
+
+## Question 16
+
+**How do queues help and hurt production inference systems?**
+
+### Sample Answer
+
+Queues absorb bursts, decouple producers from workers, and allow controlled concurrency and retries. They hurt when they hide overload or add unacceptable waiting time for interactive requests. I would monitor queue length, age of oldest job, retry count, dead-letter rate, and cancellation rate.
+
+---
+
+## Question 17
+
+**What is the role of Kubernetes in production ML serving?**
+
+### Sample Answer
+
+Kubernetes can manage deployments, service discovery, health checks, resource limits, rolling updates, node pools, and autoscaling hooks. It does not automatically solve ML serving. GPU workloads still need careful scheduling, warmup handling, memory planning, model loading, and rollout controls.
+
+---
+
+## Question 18
+
+**When is quantization useful, and what is the risk?**
+
+### Sample Answer
+
+Quantization is useful when memory bandwidth, GPU memory, or cost limits serving. It can allow larger batches, cheaper inference, or deployment on smaller hardware. The risk is quality loss, especially on domain-specific edge cases, so it needs product-specific evaluation rather than only generic benchmarks.
+
+---
+
+## Question 19
+
+**What is speculative decoding?**
+
+### Sample Answer
+
+Speculative decoding uses a smaller or faster draft model to propose tokens and a larger target model to verify them. It can reduce wall-clock decode time when the draft model is fast and its proposals are often accepted. It helps less when prefill dominates, acceptance rate is low, or orchestration overhead outweighs the decode savings.
+
+---
+
+## Question 20
+
+**How would you debug a sudden increase in LLM serving latency?**
+
+### Sample Answer
+
+I would first segment latency into gateway, routing, cache, queue, prefill, decode, dependency, and postprocessing time. Then I would compare prompt length, output length, traffic mix, model version, cache hit rate, queue depth, GPU utilization, KV-cache usage, error rate, and retry rate before and after the spike. The goal is to find whether the system is doing more work, waiting longer, or using hardware less efficiently.
+
+---
+
+## Question 21
+
+**Design exercise: how would you build a model-routing policy for cost and quality?**
+
+### Sample Answer
+
+I would define route classes based on difficulty, user tier, risk, latency target, and required tools or grounding. Easy low-risk requests can use a small model; hard, high-value, or policy-sensitive requests can escalate to a stronger model or verifier path. I would track quality, latency, cost, fallback rate, and user outcomes by route, then add evals specifically for router mistakes because bad routing silently sends hard work to weak models.
+
+---
+
+## Question 22
+
+**Operational debugging: cost doubled overnight but traffic stayed flat. What do you check?**
+
+### Sample Answer
+
+I would compare token counts, output lengths, retry rates, agent step counts, cache hit rate, route mix, model versions, prompt versions, fallback frequency, and abuse patterns before and after the change. Flat request volume does not mean flat work. A prompt change, bad cache key, router regression, longer retrieved context, or retry storm can all multiply model work without increasing traffic.
+
+---
+
+## Question 23
+
+**How would you debug model drift in production?**
+
+### Sample Answer
+
+I would first separate data drift, concept drift, and system regressions. Then I would compare current traffic to the training and previous production distributions using feature statistics, embedding distributions, input slices, labels or delayed outcomes, and model confidence. I would inspect whether a prompt, model version, retrieval index, upstream schema, or user population changed. The fix might be recalibration, retraining, routing, updated eval coverage, better monitoring by slice, or rollback if the drift came from a bad release.
+
+---
+
+## Question 24
+
+**How would you serve an LLM to millions of users?**
+
+### Sample Answer
+
+I would design it as a routed, observable inference platform rather than one giant model endpoint. The system needs an API gateway, authentication, quotas, prompt construction, model routing, caching where safe, request batching, streaming responses, autoscaled inference workers, and fallbacks for overload or provider failure. I would optimize for tokens per second, time to first token, time to final token, GPU memory, KV-cache pressure, and cost per successful task. At large scale, the key controls are batching, admission control, model tiering, cache strategy, regional capacity, observability, and gradual rollouts.
+
+---
+
+## Question 25
+
+**What is the difference between prefill and decode in LLM serving?**
+
+### Sample Answer
+
+Prefill processes the input prompt and builds the initial KV cache, so it often drives time to first token. Decode generates new tokens one at a time using the KV cache, so it often drives time to final token and tokens per second. Prefill is usually more compute-heavy over prompt tokens, while decode is often memory-bandwidth-heavy because each step reads weights and cached K/V state.
+
+---
+
+## Question 26
+
+**How do chunked prefill, prefix caching, and PagedAttention improve LLM serving?**
+
+### Sample Answer
+
+Chunked prefill splits long prompt processing into smaller pieces so one long prompt does not monopolize the GPU. Prefix caching reuses cached K/V state for repeated prompt prefixes such as system prompts or templates. PagedAttention stores KV cache in fixed-size blocks to reduce memory fragmentation and support variable-length concurrent requests. They target different bottlenecks: scheduling fairness, repeated prefill work, and KV-cache memory management.
+
+---
+
+## Question 27
+
+**When would disaggregated prefill and decode be useful?**
+
+### Sample Answer
+
+It is useful when prefill and decode have different resource needs or interfere with each other under mixed traffic. Prefill workers can be optimized for compute-heavy prompt processing, while decode workers can be optimized for memory-bandwidth-heavy token generation. The benefit is independent scaling and less interference; the cost is more complex scheduling, KV-cache transfer, and new failure modes.
+
+---
+
+## Question 28
+
+**How would you use a roofline-style model to reason about LLM serving cost?**
+
+### Sample Answer
+
+I would compare compute time with memory time and treat latency as roughly the max of the two. Compute time scales with batch size and active parameters, while memory time includes reading model weights and reading KV cache for each active sequence. Batching amortizes weight reads, but compute and KV-cache reads still scale with tokens. This explains why cost per token improves with batching at first and then flattens.
+
+---
+
+## Question 29
+
+**Why is there a lower bound on decode latency even with small batches?**
+
+### Sample Answer
+
+The system still has to read model weights and cached attention state from memory. Memory bandwidth is finite, so a forward pass cannot complete faster than the required memory movement allows. This is why simply reducing batch size cannot make latency arbitrarily small; it may reduce queueing, but it also worsens cost because weight reads are amortized over fewer tokens.
+
+---
+
+## Question 30
+
+**Why are output tokens often more expensive than input tokens?**
+
+### Sample Answer
+
+Input tokens are usually processed in prefill, where many positions can be processed in parallel and weight reads are better amortized. Output tokens are generated during decode, one step at a time, and each step reads model weights and KV cache while producing only one new token per sequence. Decode is often memory-bandwidth-bound and has lower hardware utilization, so output tokens cost more.
+
+---
+
+## Question 31
+
+**How should a serving system decide whether to store or rematerialize KV cache?**
+
+### Sample Answer
+
+It should compare expected reuse value against storage and retrieval cost. Hot prefixes may be worth keeping in HBM or host memory; warm prefixes may fit slower memory tiers; cold prefixes are often cheaper to recompute from token IDs. Rematerialization spends compute to save memory, while KV caching spends memory to save compute. The right choice depends on reuse probability, cache duration, memory tier bandwidth, and whether stored KV crowds out active serving work.
+
+---
+
+## Question 32
+
+**How would you handle 10,000 concurrent requests to an LLM API?**
+
+### Sample Answer
+
+I would start outside-in. The API gateway authenticates requests, validates payloads, attaches tenant metadata, and rejects requests that violate policy before they spend GPU. Then token-aware rate limits and admission control enforce requests per minute, tokens per minute, concurrent requests, prompt length, output length, and spend quotas. I would use exact or semantic caching where correctness allows it, route requests to healthy model pools with token-aware load estimates, queue and continuously batch inference work, and autoscale on GPU-aware metrics such as queue age, active sequences, KV-cache pressure, tokens per second, and p95 latency. Circuit breakers should isolate failing dependencies, and dashboards should segment latency, cost, fallback rate, and cache hit rate by route and tenant.
+
+---
+
+## Question 33
+
+**How would you prevent a denial-of-wallet attack on an inference API?**
+
+### Sample Answer
+
+Use token-aware quotas, not only request counts. A few huge prompts or long generations can cost more than many small requests. I would enforce per-tenant request limits, input-token limits, output-token limits, concurrency limits, maximum context length, maximum generation length, and daily spend caps. I would also add authentication, abuse detection, request validation, queue limits, and alerts on cost per tenant. The key is to reject expensive bad traffic before it reaches model workers.
+
+---
+
+## Question 34
+
+**What should happen when the vector database goes down mid-query?**
+
+### Sample Answer
+
+The system should fail intentionally rather than letting requests pile up. A circuit breaker should detect timeouts or high error rates and move from closed to open, blocking further calls temporarily. The fallback depends on risk: return a temporary unavailable message, route to a degraded keyword index, use cached retrieval results, or answer only if the task is low risk and can be handled without retrieval. In half-open state, the system sends a small number of test requests to check recovery before restoring traffic.
+
+---
+
+## Question 35
+
+**Why is round-robin load balancing often insufficient for LLM serving?**
+
+### Sample Answer
+
+LLM requests have highly variable cost. A short prompt with a 50-token answer is not equivalent to a long-context request generating 4,000 tokens. Round-robin ignores prompt length, expected output length, active sequences, KV-cache pressure, model loaded on each worker, queue depth, and tenant priority. Better load balancing uses inference-aware signals so long or expensive requests do not overload one worker while others appear healthy.
+
+---
+
+## Question 36
+
+**p95 latency doubled after adding longer retrieved context. How would you debug it?**
+
+### Sample Answer
+
+I would split latency into retrieval, reranking, prompt construction, queueing, prefill, decode, and streaming. Longer context usually increases prefill cost and KV-cache pressure, which can also increase queueing by reducing concurrency. I would compare input-token distributions, queue time, prefill time, active sequence count, GPU memory, and batch efficiency before and after the release. Fixes might include context budgeting, reranking fewer chunks, separate pools for long-context requests, caching stable retrieval, or routing complex requests differently.
+
+---
+
+## Question 37
+
+**How can caching create a security or correctness bug in an AI system?**
+
+### Sample Answer
+
+If cache keys omit tenant, user permissions, prompt version, model version, source freshness, or policy version, the system can serve another user's answer, stale policy, or output generated under old safety rules. Caching should be used only when correctness boundaries are represented in the key or the cached object is safe to share.
+
+---
+
+## Question 38
+
+**What is the difference between data drift, concept drift, and label drift?**
+
+### Sample Answer
+
+Data drift means the input distribution P(X) changes. Concept drift means the relationship P(Y | X) changes, so the same inputs no longer imply the same outputs. Label drift means the base rate P(Y) changes. These require different responses: data drift may need monitoring and recalibration, concept drift may need new labels or retraining, and label drift may require threshold or prior adjustment. In production, diagnose drift by slices and by upstream changes, not just aggregate metrics.

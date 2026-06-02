@@ -1,8 +1,9 @@
 ---
 layout: page
-title: "Retrieval and Memory Systems Practice Questions"
+title: "Chapter 2 Questions: LLM Engineering"
 guide_type: questions
 ---
+
 # Chapter 2 — Practice Questions
 
 Explanatory material for this chapter lives in [`guide.md`](guide.html).
@@ -15,248 +16,328 @@ Explanatory material for this chapter lives in [`guide.md`](guide.html).
 
 ## Question 1
 
-**What problem does retrieval solve in an LLM system?**
+**Why does few-shot prompting work?**
 
 ### Sample Answer
 
-Retrieval solves the problem that the model only sees its prompt and may not know private, current, or domain-specific information. A retrieval system selects relevant external evidence and places it into the context window so the model can answer from grounded information instead of relying only on weights.
+Few-shot prompting works because the model uses the examples to infer the latent task and output style. The examples shift the local conditional distribution and show the model what a correct transformation looks like in context.
 
 ---
 
 ## Question 2
 
-**What is the difference between retrieval and memory?**
+**How would you make sure an LLM returns valid JSON?**
 
 ### Sample Answer
 
-Retrieval usually means selecting information from an external corpus such as documents, tickets, code, or knowledge base articles. Memory is persistent state created or updated by the system over time, such as user preferences, prior decisions, or summarized session history. Both are read through retrieval-like mechanisms, but memory also needs explicit write, update, compression, and forgetting policies.
+I would not rely on prompt wording alone. I would use schema-constrained generation if available, validate the output strictly, retry on parse failure, and keep the schema as small and specific as possible.
 
 ---
 
 ## Question 3
 
-**Why is chunking so important in RAG?**
+**Why do agent systems fail so often?**
 
 ### Sample Answer
 
-Chunking defines the unit of retrieval. If chunks are too small, they may omit the surrounding context needed to answer. If chunks are too large, retrieval becomes noisy and wastes prompt tokens. Good chunking preserves semantic boundaries and makes each retrieved unit useful on its own or linkable to a useful parent section.
+Agents fail because errors compound across steps. A bad retrieval can cause a bad plan, a bad tool call can cause a bad observation, and then the system keeps building on a wrong state. Loops, retries, and memory also create more failure surface area.
 
 ---
 
 ## Question 4
 
-**Implementation tradeoff: how would you choose a chunk size and overlap?**
+**What is the difference between prompting and fine-tuning?**
 
 ### Sample Answer
 
-I would start from the document structure and expected questions rather than picking a universal size. For conceptual docs I might split by headings and paragraphs; for logs or transcripts I might use windows with overlap. Larger chunks preserve context but add noise and token cost. Smaller chunks improve precision but risk boundary failures. I would tune using a retrieval evaluation set with realistic queries.
+Prompting changes the input context to steer behavior at runtime. Fine-tuning changes the model weights so the behavior becomes internalized. Prompting is faster and more flexible; fine-tuning is more stable but slower and more expensive to change.
 
 ---
 
 ## Question 5
 
-**What is dense retrieval good at, and where does it fail?**
+**When would you choose an agent over a single prompt?**
 
 ### Sample Answer
 
-Dense retrieval is good at semantic matching, paraphrases, and natural language queries. It can find relevant text even when the words differ. It fails on exact identifiers, rare names, error codes, and cases where semantically similar text is not actually the answer. It also depends heavily on embedding model quality.
+I would choose an agent when the task requires multiple steps, tool use, intermediate observation, or iterative search. If the task is simple and stateless, a single prompt is usually cheaper and more reliable.
 
 ---
 
 ## Question 6
 
-**What is sparse retrieval good at, and where does it fail?**
+**How do you reduce hallucinations in a production system?**
 
 ### Sample Answer
 
-Sparse retrieval, often BM25, is good at exact terms, product names, IDs, stack traces, and domain-specific phrases. It fails when the query and document use different wording for the same concept. It does not understand meaning in the same way embeddings do.
+I would combine retrieval, structured outputs, verification, and constrained actions. I would also make sure the model is only allowed to answer from grounded sources when appropriate, and I would measure hallucination rate offline and online.
 
 ---
 
 ## Question 7
 
-**Implementation tradeoff: when would you use hybrid retrieval instead of only vector search?**
+**Why is structured output so important?**
 
 ### Sample Answer
 
-I would use hybrid retrieval when the corpus contains both natural language concepts and exact terms. Enterprise corpora often have product names, account IDs, error codes, and policy language. Dense search catches meaning; BM25 catches exactness. The cost is more system complexity, score merging, and often reranking, but the quality is usually more robust.
+Because downstream software needs reliable typed data, not fluent prose. Structured output reduces ambiguity, makes validation possible, and prevents the model from drifting into unrelated text.
 
 ---
 
 ## Question 8
 
-**How does a reranker improve retrieval quality?**
+**How do you think about latency in an LLM workflow?**
 
 ### Sample Answer
 
-First-stage retrieval is optimized for speed and recall. A reranker looks more carefully at query-candidate pairs and reorders the candidate set for precision. Cross-encoder rerankers are often stronger because they process the query and document together, but they add latency and inference cost.
+I break latency into model time, retrieval time, tool time, and orchestration overhead. Then I ask which steps are actually necessary and which can be parallelized, cached, shortened, or removed.
 
 ---
 
 ## Question 9
 
-**Implementation tradeoff: how many candidates should you send to a reranker?**
+**What is the biggest mistake people make when designing agent systems?**
 
 ### Sample Answer
 
-Enough to preserve recall, but not so many that latency and cost explode. A common pattern is to retrieve 50 to 200 first-stage candidates, rerank them, and send the top 5 to 10 chunks to the model. The right number depends on corpus quality, query difficulty, reranker cost, and latency budget.
+They assume the model will self-correct reliably. In practice, agents need explicit budgets, validation, stopping rules, and safe tool access. Otherwise errors accumulate and the system becomes unstable.
 
 ---
 
 ## Question 10
 
-**Why is metadata filtering important?**
+**How would you debug a prompt that works in demos but fails in production?**
 
 ### Sample Answer
 
-Metadata filtering enforces scope, permissions, freshness, and product relevance. Similarity alone cannot know whether a document belongs to the right tenant, user, version, or access-control group. Without metadata, the system may retrieve a semantically relevant but unauthorized or outdated document.
+I would inspect the real inputs, compare them to the demo examples, check for distribution shift, look for prompt conflicts, evaluate retrieval quality, inspect tool failures, and measure where the output first diverges from expectations.
 
 ---
 
 ## Question 11
 
-**Implementation tradeoff: what metadata would you store with each chunk?**
+**Why can adding more context hurt performance?**
 
 ### Sample Answer
 
-I would store stable document ID, chunk ID, parent section ID, source path or URL, title, heading path, timestamps, tenant or user scope, access-control labels, product area, document type, version, language, and embedding model version. More metadata improves filtering and debugging, but it increases ingestion complexity and requires a stable taxonomy.
+Because more context can add noise, increase token cost, and make the relevant signal harder to find. The model has limited attention and context budget, so more text is not always better.
 
 ---
 
 ## Question 12
 
-**What is embedding drift?**
+**What is a good fallback strategy for a critical LLM feature?**
 
 ### Sample Answer
 
-Embedding drift happens when vectors in the same index are produced by different embedding models or incompatible versions. Similarity scores become less meaningful, and retrieval quality can silently degrade. The fix is to version embeddings and re-embed the corpus when changing embedding models.
+I would use a conservative fallback such as a smaller deterministic model, a rules-based path, or a human-in-the-loop approval step. The fallback should fail safely rather than attempting to be clever.
+
+---
+
+# Cross-Section (Foundations ↔ LLM Engineering) Questions
+
+These questions explicitly connect Chapter 1 back to the primitives in Chapter 0.
 
 ---
 
 ## Question 13
 
-**How would you evaluate retrieval separately from generation?**
+**Why does prompt engineering work even though we are not changing model weights? (Connect to probability + optimization)**
 
 ### Sample Answer
 
-I would create realistic queries with known relevant documents or answer-containing chunks. Then I would measure recall at k, precision at k, mean reciprocal rank, and whether the final context contains enough evidence to answer. This isolates whether failures come from retrieval or from the model's generation.
+Prompting changes the input $x$, which changes the conditional distribution $P(y\mid x)$.  
+Even though weights are fixed, the model was trained to condition strongly on context, so modifying the prompt effectively shifts the probability mass toward different outputs.  
+This is equivalent to changing the optimization target at inference time without retraining.
 
 ---
 
 ## Question 14
 
-**What is lost-in-the-middle, and how do you mitigate it?**
+**Why do structured outputs improve reliability? (Connect to entropy + information flow)**
 
 ### Sample Answer
 
-Lost-in-the-middle is the tendency for models to underuse information buried in the middle of long contexts. Mitigations include shortening context, placing the strongest evidence first or near the instruction, grouping related evidence, summarizing low-priority material, and avoiding unnecessary chunks.
+Structured outputs constrain the output space, reducing entropy. By narrowing the possible outputs, we improve the signal-to-noise ratio and make it easier to validate correctness, which leads to more reliable systems.
 
 ---
 
 ## Question 15
 
-**Implementation tradeoff: FAISS, pgvector, or a managed vector database?**
+**Why does adding more context sometimes hurt even in a well-designed system? (Connect to information flow)**
 
 ### Sample Answer
 
-FAISS is strong for local control, experimentation, and custom indexes, but you build the service layer yourself. pgvector is attractive if the app already uses Postgres and the corpus is small to medium with useful relational metadata. Managed vector databases like Pinecone, Weaviate, or hosted Milvus reduce operational burden and scale better for dedicated vector workloads, but add vendor or platform complexity.
+Because the model has limited capacity to attend to relevant information. Adding more context can dilute signal with noise, making it harder for the model to focus on the important parts, which degrades performance.
 
 ---
 
 ## Question 16
 
-**What is the difference between HNSW and IVF-style indexes?**
+**Why does few-shot prompting sometimes outperform zero-shot? (Connect to representation)**
 
 ### Sample Answer
 
-HNSW is graph-based. It searches by navigating a graph of nearby vectors and often gives strong recall at low latency, but uses more memory. IVF partitions vectors into clusters and searches only selected partitions. IVF can scale well and reduce search work, but recall depends on partition quality and how many clusters are probed.
+Few-shot examples provide structured patterns that the model can match in embedding space. They effectively define a local task representation that aligns better with the desired output distribution.
 
 ---
 
 ## Question 17
 
-**How should citations be designed in a RAG system?**
+**Why are retries and self-consistency effective? (Connect to probability)**
 
 ### Sample Answer
 
-Citations should use stable source metadata such as document ID, URL, section, page, or timestamp. The prompt should require citations for factual claims, and the system should preferably verify that cited sources actually support the claim. A citation is not automatically proof; the cited span must contain the evidence.
+Because the model samples from a distribution, multiple runs explore different parts of that distribution. Aggregating results increases the chance of selecting a high-quality outcome and reduces variance.
 
 ---
 
 ## Question 18
 
-**What is retrieval poisoning?**
+**Why do agent systems become unstable over time? (Connect to optimization + distribution shift)**
 
 ### Sample Answer
 
-Retrieval poisoning occurs when malicious or low-quality content enters the retrievable corpus and influences generation. For example, a retrieved page might contain instructions telling the model to ignore system rules. The fix is to treat retrieved content as data, separate it from instructions, sanitize untrusted sources, and rank by source authority.
+Each step feeds the model its own outputs, which may not match the training distribution. Errors accumulate and compound, leading to drift away from the intended behavior.
 
 ---
 
 ## Question 19
 
-**How would you design long-term memory for a user-facing assistant?**
+**Why is retrieval helpful but not sufficient to prevent hallucinations? (Connect to probability + signal)**
 
 ### Sample Answer
 
-I would separate raw logs from memory. Memory writes would be selective and classified by type, such as preference, project fact, episode, or identity. Each memory would have scope, source, timestamp, confidence, and retention policy. Reads would use retrieval with metadata filters, and users should be able to inspect, correct, and delete memory.
+Retrieval adds high-signal context, shifting the distribution toward grounded outputs. However, the model can still assign high probability to incorrect continuations if the retrieved context is incomplete, noisy, or misused.
 
 ---
 
 ## Question 20
 
-**Implementation tradeoff: when should a memory be summarized instead of stored as raw episodes?**
+**Why is validation necessary even with a strong model? (Connect to optimization)**
 
 ### Sample Answer
 
-Summarization is useful when many episodes repeat the same durable pattern or when raw history is too large for efficient retrieval. It reduces cost and noise, but it can introduce summary drift or erase important details. I would keep links to source episodes for auditability and update summaries conservatively.
+Because the model optimizes for likelihood, not correctness. It can produce high-confidence but wrong outputs, so external validation is required to enforce correctness constraints.
 
 ---
 
 ## Question 21
 
-**What is the difference between episodic and semantic memory?**
+**Why is decomposition a powerful strategy? (Connect to representation + optimization)**
 
 ### Sample Answer
 
-Episodic memory stores events, such as what happened in a session or ticket. Semantic memory stores generalized facts, such as user preferences or stable project knowledge. Episodic memory is useful for chronology and auditability; semantic memory is useful for personalization and reusable context.
+Breaking a task into smaller steps simplifies each subproblem and aligns better with the model's learned patterns. It reduces complexity and improves the quality of intermediate representations.
 
 ---
 
 ## Question 22
 
-**Why can adding more retrieved chunks hurt answer quality?**
+**Why does tool use extend capability beyond the model? (Connect to parameterization)**
 
 ### Sample Answer
 
-More chunks can add irrelevant or conflicting information, increase prompt cost, and bury the key evidence. Retrieval should select high-value context, not maximize context size. A smaller, better-ranked context often produces more grounded answers than a large noisy context.
+Tools act as external modules that provide functionality not encoded in the model's parameters. Instead of learning everything internally, the system delegates certain operations to deterministic functions.
 
 ---
 
 ## Question 23
 
-**How does retrieval change model behavior in terms of information flow?**
+**Why is memory pruning important? (Connect to information flow)**
 
 ### Sample Answer
 
-Retrieval changes the input signal. Instead of asking the model to answer from parameters alone, the system injects external evidence into the prompt. That shifts the conditional distribution toward answers supported by the retrieved context. If retrieval injects noisy or wrong context, the model's output will often follow that bad signal.
+Because storing everything increases noise and reduces retrieval quality. Pruning ensures that only high-signal information is retained, improving downstream reasoning.
 
 ---
 
 ## Question 24
 
-**What would you monitor in a production retrieval system?**
+**Why is prompt ambiguity dangerous in production systems? (Connect to probability)**
 
 ### Sample Answer
 
-I would monitor retrieval latency, empty-result rate, recall and precision on evaluation sets, reranker latency, cache hit rate, index freshness, embedding failures, permission-filter behavior, citation support rate, memory growth, and user feedback on answer quality. I would also log query rewrites, filters, retrieved chunk IDs, and index versions for debugging.
+Ambiguity widens the output distribution, increasing variance and making outputs less predictable. In production, this leads to inconsistent behavior and harder debugging.
 
 ---
 
 ## Question 25
 
-**What are the tradeoffs between fine-tuning and RAG?**
+**A prompt works well offline but fails after retrieval is added. Why might that happen?**
 
 ### Sample Answer
 
-Fine-tuning changes model weights, so it is useful for teaching durable behavior, domain style, formats, and task patterns. It is less ideal for fast-changing facts because updating weights is slower, riskier, and harder to audit. RAG keeps knowledge outside the model and retrieves it at runtime, which makes updates, citations, permissions, and freshness easier. The tradeoff is that RAG adds retrieval latency and can fail if chunking, ranking, or context construction is poor. In production, fine-tuning often shapes behavior while RAG supplies current or private knowledge.
+Retrieval changes the input distribution. The model is no longer conditioning only on the clean prompt; it is also conditioning on retrieved snippets that may be noisy, contradictory, stale, or instruction-like. This can dilute the original task, introduce context poisoning, or make the model over-trust irrelevant evidence. I would debug retrieval quality, source ranking, prompt boundaries, citation support, and whether retrieved text is being treated as data rather than instructions.
+
+---
+
+## Question 26
+
+**Why can retries make an LLM workflow less reliable instead of more reliable?**
+
+### Sample Answer
+
+Retries help when failures are transient or validation-driven. They hurt when the underlying issue is systematic, such as a bad prompt, broken tool, invalid schema, or missing context. Blind retries can increase cost, duplicate side effects, amplify outages, and produce inconsistent state. Good retries are bounded, idempotent, logged, and conditioned on the failure type.
+
+---
+
+## Question 27
+
+**How would you safely expose tools to an LLM?**
+
+### Sample Answer
+
+I would expose tools through a narrow registry of typed, permissioned actions. Each tool should have a schema, input validation, output validation, timeout, audit log, and risk level. Read-only tools can be broadly available; write or irreversible tools need scopes, idempotency keys, approval gates, and rollback or compensation paths. The model should never receive arbitrary code or raw database write access.
+
+---
+
+## Question 28
+
+**What should happen if a tool partially fails after making an external change?**
+
+### Sample Answer
+
+The system should treat this as a state-management problem, not just a prompt problem. The tool call should have an idempotency key, durable status, and enough logging to determine whether the side effect happened. The agent should not blindly retry. It should check the external state, continue only from the confirmed state, or escalate to human review if the result is ambiguous.
+
+---
+
+## Question 29
+
+**Why can structured outputs still fail even with JSON mode or schema-constrained generation?**
+
+### Sample Answer
+
+JSON mode can improve syntax, but it does not guarantee semantic correctness. The model can still put the wrong value in a valid field, omit contextually required information, hallucinate IDs, choose the wrong enum, or satisfy the schema while violating business rules. Production systems still need validators, grounding checks, policy checks, and fallback behavior.
+
+---
+
+## Question 30
+
+**When should you avoid building an agent and use a simpler workflow instead?**
+
+### Sample Answer
+
+Avoid an agent when the task is simple, deterministic, high-risk, cheap to solve with a fixed workflow, or does not require iterative observation. A linear pipeline with classification, retrieval, validation, and one model call is often easier to debug, cheaper, and safer. Agents are useful when the task genuinely needs multi-step search, tool use, and adaptation under uncertainty.
+
+---
+
+## Question 31
+
+**How would you debug an LLM workflow that only fails in production traffic?**
+
+### Sample Answer
+
+I would inspect traces rather than only the final answer: prompt version, retrieved context, tool calls, validation failures, model parameters, latency, user segment, and route. Then I would compare production failures to offline eval cases to identify distribution shift. Common causes are noisy retrieval, prompt accumulation, hidden user intents, tool errors, schema drift, and missing eval coverage.
+
+---
+
+## Question 32
+
+**How would you detect hallucinations automatically?**
+
+### Sample Answer
+
+I would treat hallucination detection as claim verification, not vibes. For grounded tasks, extract factual claims from the answer and check whether each claim is supported by retrieved sources, citations, tool outputs, or a trusted database. Deterministic checks are best when possible, such as verifying IDs, dates, calculations, and citation spans. For open-ended claims, I would use calibrated judge models or human review on sampled traffic, track unsupported-claim rate, and slice failures by retrieval quality, prompt version, and task type.
+
+---

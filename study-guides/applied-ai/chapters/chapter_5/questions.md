@@ -1,8 +1,9 @@
 ---
 layout: page
-title: "Learning Loops Practice Questions"
+title: "Chapter 5 Questions: Evaluation Systems"
 guide_type: questions
 ---
+
 # Chapter 5 — Practice Questions
 
 Explanatory material for this chapter lives in [`guide.md`](guide.html).
@@ -15,310 +16,338 @@ Explanatory material for this chapter lives in [`guide.md`](guide.html).
 
 ## Question 1
 
-**What is the simplest mental model for a learning loop?**
+**How would you evaluate an LLM customer-support bot?**
 
 ### Sample Answer
 
-A learning loop turns observed behavior into future behavior. A policy acts, the system observes feedback, feedback is converted into training signal, and a candidate update changes the policy. The hard part is deciding which feedback is trustworthy enough to optimize.
+I would start with the product goal: resolving user issues safely and accurately. I would measure task success, escalation rate, factuality against policy docs, refusal quality for unsupported requests, latency, cost per resolved ticket, and user satisfaction. I would use an offline golden set for common and high-risk cases, regression tests for past failures, human review for ambiguous cases, and online A/B tests to verify real user impact.
 
 ---
 
 ## Question 2
 
-**How does reinforcement learning connect to Chapter 0's idea of optimization?**
+**Why is one aggregate eval score usually not enough?**
 
 ### Sample Answer
 
-Chapter 0 treats optimization as shaping parameters toward an objective. RL uses reward as that objective signal. The difference is that the signal often comes from interaction rather than a fixed label, so reward design and credit assignment become central.
+Because LLM failures are unevenly distributed. A system can improve on average while getting worse for long-context inputs, high-risk intents, non-English users, or tool-required workflows. I would report aggregate metrics, but also slice by task type, risk level, input length, user cohort, retrieval quality, and failure class.
 
 ---
 
 ## Question 3
 
-**What is the difference between reward and feedback?**
+**What is the difference between offline and online evaluation?**
 
 ### Sample Answer
 
-Feedback is the raw observation, such as a thumbs up, preference label, click, correction, or task outcome. Reward is the interpreted scalar signal used for optimization. Raw feedback can be noisy or biased, so it should not automatically become reward.
+Offline evaluation runs the system on a fixed dataset before deployment. It is repeatable and useful for regression testing, but may not match real user behavior. Online evaluation measures live user outcomes through A/B tests, canaries, satisfaction signals, task completion, and escalation rates. Offline evals catch many failures early; online evals validate real product impact.
 
 ---
 
 ## Question 4
 
-**What is a policy in an LLM post-training system?**
+**When is a metric worse than useless?**
 
 ### Sample Answer
 
-The policy is the model distribution that produces behavior. For an LLM, it maps a prompt and previous tokens to a distribution over next tokens. Updating the policy changes which responses, styles, tool calls, and refusals are more likely.
+A metric is worse than useless when optimizing it pushes the system away from user value. For example, measuring a support bot only by low escalation rate can reward the bot for refusing to hand off cases that need a human. Measuring answer length can reward verbosity instead of correctness. A bad metric does not merely fail to help; it creates the wrong incentives.
 
 ---
 
 ## Question 5
 
-**What are value and advantage used for?**
+**How would you design a benchmark for a RAG system?**
 
 ### Sample Answer
 
-Value estimates expected future reward from a state or partial trajectory. Advantage estimates whether an action was better or worse than expected. They help reduce noise and assign credit, especially when feedback is delayed across a multi-step trajectory.
+I would include representative production questions, high-value workflows, known failures, unanswerable questions, ambiguous questions, and adversarial cases with distracting documents. Each case should include source documents, expected answer behavior, metadata tags, and a scoring method. I would measure answer correctness, groundedness, citation quality, refusal behavior, latency, and cost, then slice by retrieval quality and question type.
 
 ---
 
 ## Question 6
 
-**Why is exploration vs exploitation a production concern?**
+**How do you evaluate factuality or hallucination rate?**
 
 ### Sample Answer
 
-Exploitation uses the current best-known behavior, while exploration tries uncertain behavior to discover improvements. Exploration can harm users if bad variants are shown live, but without exploration the system may get stuck. Production systems usually control exploration with bandits, canaries, shadow traffic, or offline evaluation.
+For grounded tasks, I would evaluate claims against the provided sources rather than against general world knowledge. A scoring pipeline could extract claims, check whether each claim is supported by retrieved documents, and use human or judge-model review for ambiguous cases. I would report unsupported-claim rate, answer-level hallucination rate, and examples of severe failures.
 
 ---
 
 ## Question 7
 
-**Why is trajectory logging important for learning loops?**
+**When would exact match be a good metric, and when would it be bad?**
 
 ### Sample Answer
 
-Final answers do not explain how behavior happened. Trajectory logs capture prompts, model versions, tool calls, observations, candidate outputs, validation results, and feedback. That makes failures attributable and turns production behavior into useful evaluation or training data.
+Exact match is good for canonical outputs such as classification labels, extracted fields, selected options, or numeric answers. It is bad for open-ended generation where many phrasings are correct. For summaries or helpful answers, exact match would penalize valid variation and miss deeper quality issues.
 
 ---
 
 ## Question 8
 
-**When would you use SFT instead of RLHF or DPO?**
+**How would you evaluate an agent that uses tools?**
 
 ### Sample Answer
 
-I would use SFT when I have high-quality demonstrations of the desired behavior. It is simpler and more stable than RLHF, and it is good for teaching format, domain style, and task patterns. It is weaker when ranking plausible alternatives is easier than writing ideal answers.
+I would evaluate both final task success and intermediate tool behavior. Metrics should include correct tool selection, valid tool arguments, tool success rate, error handling, unnecessary tool calls, final answer correctness, latency, and cost. Tracing is important because a fluent final answer can hide a wrong tool call or ignored tool failure.
 
 ---
 
 ## Question 9
 
-**What is the difference between RLHF and DPO?**
+**How do you detect regressions after changing a prompt?**
 
 ### Sample Answer
 
-RLHF usually trains a reward model from human preferences and then optimizes the policy against that reward model, often with a KL penalty to keep it near a reference model. DPO directly optimizes the policy from chosen-vs-rejected preference pairs without the same separate RL loop.
+I would run the candidate prompt against a baseline on a regression suite containing golden cases, past production failures, edge cases, and safety-sensitive examples. I would compare metrics by slice, inspect failures, and use hard gates for critical correctness and safety. I would also run online canaries if the offline result looks acceptable.
 
 ---
 
 ## Question 10
 
-**Why does RLHF often use a KL penalty?**
+**What makes a good golden set?**
 
 ### Sample Answer
 
-The KL penalty keeps the updated policy close to a reference policy. Without it, the model may drift into strange behavior that exploits reward-model weaknesses. It is a regularization term that limits how aggressively the policy changes under an imperfect reward.
+A good golden set is carefully labeled, representative of important workflows, includes edge cases and high-risk cases, has stable scoring rules, and is protected from overfitting or leakage. It should be small enough to maintain quality but broad enough to catch meaningful regressions.
 
 ---
 
 ## Question 11
 
-**What is reward hacking?**
+**What is eval leakage?**
 
 ### Sample Answer
 
-Reward hacking happens when the model maximizes the reward proxy without satisfying the real goal. For example, it may learn to produce longer answers because the reward model associates length with quality, or it may add fake citations because citations look trustworthy.
+Eval leakage happens when test answers or test patterns influence the system being evaluated. Examples include training on eval data, putting golden examples into the prompt, retrieving expected answers from a vector store, or manually special-casing benchmark cases. Leakage makes scores untrustworthy because the eval no longer measures generalization.
 
 ---
 
 ## Question 12
 
-**How does reward hacking relate to Chapter 0 objective shaping?**
+**How reliable are LLM judge models?**
 
 ### Sample Answer
 
-Chapter 0 says optimization amplifies the objective. Reward hacking is what happens when the objective is only a proxy for the intended behavior. The optimizer finds patterns that increase reward even if they violate the real goal.
+Judge models are useful but imperfect. They can prefer verbose answers, confident style, familiar model outputs, or safe-sounding responses. I would calibrate judges against human labels, use clear rubrics, randomize answer order for pairwise comparisons, track judge versions, inspect disagreements, and prefer deterministic validators when possible.
 
 ---
 
 ## Question 13
 
-**Why can preference optimization overfit to style over substance?**
+**How would you evaluate refusal quality?**
 
 ### Sample Answer
 
-Humans often reward answers that are polished, confident, polite, or well formatted. Those signals are easier to observe than factual correctness or deep reasoning. If the preference dataset over-rewards surface features, the model can become more pleasing while becoming less correct.
+I would measure both under-refusal and over-refusal. Under-refusal means the system answers unsafe or unsupported requests. Over-refusal means it refuses benign requests. A good refusal should identify the boundary, avoid harmful content, and offer safe alternatives when possible. The eval set should include unsafe, borderline, and clearly benign cases.
 
 ---
 
 ## Question 14
 
-**What is catastrophic forgetting in continual learning?**
+**Why do confidence intervals or uncertainty matter in evals?**
 
 ### Sample Answer
 
-Catastrophic forgetting is when new training improves recent or narrow tasks while damaging older capabilities. A model fine-tuned on support transcripts might become better at support tone but worse at general reasoning or safety. Replay data, broad regression evals, and gated updates help reduce the risk.
+Metrics are estimates from samples. If a pass rate moves from 84% to 85% on a small dataset, that may just be noise. Confidence intervals and repeated runs help determine whether a change is meaningful. They are especially important for sliced metrics because each slice may have fewer examples.
 
 ---
 
 ## Question 15
 
-**Why should raw user feedback not directly update an LLM?**
+**How would you use synthetic evals safely?**
 
 ### Sample Answer
 
-Raw user feedback can be noisy, biased, adversarial, private, or unrelated to model quality. A thumbs up may reward tone rather than truth. A click may reward curiosity rather than relevance. The safer path is to log, filter, label, evaluate, and gate updates before changing the model.
+I would use synthetic evals to expand coverage around known patterns, rare failures, privacy-sensitive cases, or adversarial variants. I would not trust them blindly. I would review samples, mix them with real production cases, track their source, and check whether improvements on synthetic cases correlate with real-world outcomes.
 
 ---
 
 ## Question 16
 
-**How would you design a safe continual-learning pipeline?**
+**How do you evaluate robustness?**
 
 ### Sample Answer
 
-I would collect trajectory data with privacy filtering, select candidate examples, label or verify them, mix them with replay data, train a candidate model, run broad quality and safety evals, canary the model, monitor production metrics, and keep rollback ready. I would treat model updates like production releases.
+I would perturb inputs and measure whether behavior stays stable. Perturbations could include paraphrases, irrelevant context, different document order, longer inputs, missing fields, tool errors, and repeated stochastic runs. Robustness is about variance, not just average correctness.
 
 ---
 
 ## Question 17
 
-**When are bandits a better fit than full RL?**
+**How would you choose between human evaluation and automated evaluation?**
 
 ### Sample Answer
 
-Bandits are a better fit when the system chooses among actions or variants and observes relatively direct reward, but does not need long-horizon planning. Examples include choosing a prompt template, model variant, retrieval depth, ranking policy, or UI treatment.
+I would use automated checks for exact outputs, schema validity, known failure patterns, and broad regression coverage. I would use human evaluation for subjective quality, expert factuality, policy interpretation, and judge calibration. The best eval systems combine automation for scale with human review for nuance.
 
 ---
 
 ## Question 18
 
-**What is distribution drift in a learning loop?**
+**What should be included in an evaluation report before shipping a model change?**
 
 ### Sample Answer
 
-Distribution drift means the data the system sees changes over time. Users change, products change, the UI changes, and the model itself changes which examples are observed. A reward model or preference dataset that worked before may stop matching current behavior.
+It should compare candidate versus baseline, show primary and guardrail metrics, include slice breakdowns, report uncertainty where relevant, list representative failures, show latency and cost changes, identify safety or correctness regressions, and make a clear ship, canary, rollback, or block recommendation.
 
 ---
 
 ## Question 19
 
-**How would you connect evaluation data from Chapter 4 to learning data in Chapter 5?**
+**Why might user satisfaction be a misleading metric?**
 
 ### Sample Answer
 
-Evaluation data identifies where behavior succeeds or fails. Those failures can become labeling tasks, preference comparisons, SFT examples, regression tests, or reward-model training cases. The important step is preserving the distinction between eval data used for gating and training data used for updating.
+Users may reward confident, fluent answers even when they are wrong. They may also dislike correct refusals or safe boundaries. Satisfaction is valuable as a product signal, but it should be paired with factuality, task success, safety, and escalation metrics.
 
 ---
 
 ## Question 20
 
-**What is a strong interview answer for "how would you improve this model from user feedback?"**
+**How do evaluation systems connect to learning loops?**
 
 ### Sample Answer
 
-I would say that I would not train directly on raw feedback. I would define the target behavior, log full trajectories, filter sensitive or low-quality data, collect preference labels or verified outcomes, choose SFT, DPO, RLHF, or bandits based on the signal, evaluate offline, gate for safety and regressions, canary the update, and monitor for drift.
+Evaluation produces the signal used to improve the system. Failed examples become regression tests, labeled examples become training or preference data, online outcomes identify valuable cases, and human review clarifies policy. Without reliable evals, a learning loop may optimize noise or amplify bad incentives.
 
 ---
 
 ## Question 21
 
-**What should gate an online model or policy update before it reaches all users?**
+**Design exercise: how would you evaluate an AI support agent before launch?**
 
 ### Sample Answer
 
-The update should pass offline evals, safety evals, slice-based regression checks, latency/cost checks, and canary monitoring. It should also have a rollback plan and clear ownership. For learning loops, the gate matters because bad updates can change the future data distribution and create feedback loops.
+I would build an eval set from real support intents, historical escalations, policy-sensitive cases, adversarial prompts, and unanswerable requests. I would score task success, factuality, groundedness, citation quality, tool correctness, escalation behavior, latency, and cost. The release gate should compare against a baseline by slice, require no regressions on safety or policy cases, and include human review for representative failures.
 
 ---
 
 ## Question 22
 
-**How would you roll back after a bad learning update?**
+**Production debugging: an eval dashboard improved, but users report worse answers. What would you investigate?**
 
 ### Sample Answer
 
-Keep model, prompt, reward, and data versions immutable so the system can revert to the last known-good version. Stop further data collection from the bad policy if it is contaminating logs, mark affected trajectories, and run regression analysis to identify which slices failed. Then fix the data, reward, or gating process before trying another update.
+I would check whether the eval set matches current traffic, whether aggregate gains hide slice regressions, whether synthetic cases overweight easy patterns, whether the judge model rewards style over correctness, and whether online traffic has retrieval, latency, or tool failures not represented offline. I would inspect traces from bad user reports and add those cases to the regression suite.
 
 ---
 
 ## Question 23
 
-**What is evaluation drift in a learning loop?**
+**What are ROC-AUC's limitations on imbalanced datasets?**
 
 ### Sample Answer
 
-Evaluation drift happens when the eval set or metric stops representing the current product distribution. As the model changes, users may change behavior, routes may change, and new failure modes may appear. A learning loop needs fresh production samples, slice monitoring, held-out sets, and periodic human review so the gate stays meaningful.
+ROC-AUC measures how well positives are ranked above negatives across thresholds, but it can look strong even when performance on the rare class is poor. On highly imbalanced datasets, the false positive rate can stay small simply because there are many negatives, while the absolute number of false positives is still too large for the product. Precision-recall curves, precision at k, recall at an operating threshold, calibration, and cost-sensitive metrics are often more informative for rare-event problems.
 
 ---
 
 ## Question 24
 
-**Why is it risky to train directly on thumbs-up / thumbs-down feedback?**
+**A candidate model improves the average eval score but regresses a small high-risk slice. What should you do?**
 
 ### Sample Answer
 
-Raw user feedback is noisy and biased. Users may rate style instead of correctness, only complain when angry, or reward confident but wrong answers. Feedback also lacks context unless full traces are stored. It should be filtered, calibrated, joined with task outcomes, and often converted into preference or supervised examples before training.
+I would not ship broadly based on the aggregate. Small slices have uncertainty, but high-risk regressions deserve more caution, not less. I would inspect representative failures, add more cases or human review for that slice, check whether the metric reflects real severity, and either block the release or canary only in routes where the regression cannot occur.
 
 ---
 
 ## Question 25
 
-**How can a production RL or bandit loop make a product worse even while optimizing its reward?**
+**How would you use confidence intervals or bootstrap estimates in an eval report?**
 
 ### Sample Answer
 
-The reward may be incomplete. A system optimizing clicks, short-term satisfaction, or task completion may learn to avoid hard cases, over-escalate, become too verbose, or exploit UI behavior. In production, the reward must be constrained by safety, quality, fairness, latency, and long-term user trust metrics.
+I would report candidate vs baseline with sample counts and uncertainty ranges, especially for sliced metrics. Bootstrap estimates are useful when the metric is complex or not a simple accuracy rate. The goal is to show whether a measured delta is likely meaningful or just sampling noise. For critical safety or security gates, I would still require hard failure thresholds.
 
 ---
 
 ## Question 26
 
-**What is PEFT, and why is it useful for post-training?**
+**An LLM judge score improved but human review got worse. What might have happened?**
 
 ### Sample Answer
 
-Parameter-efficient fine-tuning adapts a model by training a small number of parameters while keeping most or all of the base model frozen. It is useful because full fine-tuning is expensive in GPU memory, optimizer state, checkpoint size, and regression risk. PEFT constrains the update, making targeted adaptation cheaper and often safer for narrow domains or behaviors. It still needs eval gates because even small updates can overfit, damage safety behavior, or fail outside the target slice.
+The judge may be rewarding style, verbosity, confidence, or prompt-specific patterns instead of real quality. The candidate may have overfit to the judge rubric, or the human sample may contain harder cases than the automated eval. I would recalibrate the judge against human labels, inspect disagreements, slice by task type, and update the rubric or judge prompt.
 
 ---
 
 ## Question 27
 
-**What is LoRA's core idea?**
+**When would you use ROC-AUC versus a precision-recall curve?**
 
 ### Sample Answer
 
-LoRA represents a weight update as a low-rank decomposition. Instead of updating a full weight matrix $W$, it freezes $W$ and trains small matrices whose product approximates the update: $\Delta W = AB$. The practical mental model is: frozen base weights plus small trainable low-rank adapters. This reduces trainable parameters and optimizer memory while still allowing the model's behavior to shift.
+ROC-AUC is useful when you care about ranking positives above negatives across thresholds and the classes are not extremely imbalanced. Precision-recall curves are usually more informative when positives are rare, because they focus on the quality and coverage of positive predictions rather than being dominated by true negatives. In production, I would choose the metric based on the operating point and cost of errors, not only the global curve.
 
 ---
 
 ## Question 28
 
-**When would you use LoRA instead of full fine-tuning?**
+**How should you handle class imbalance in model training and evaluation?**
 
 ### Sample Answer
 
-I would use LoRA when the base model is already capable and I need a targeted adaptation, such as domain tone, formatting, tool-call behavior, or customer-specific behavior. It is attractive when GPU memory, training time, or deployment size matter. I would prefer full fine-tuning when the desired change is broad, the base model lacks the capability, or the adaptation needs deeper changes than a small low-rank update can express.
+For evaluation, avoid accuracy alone and use metrics such as precision, recall, F1, PR-AUC, calibration, cost-weighted metrics, or slice-specific thresholds. For training, common strategies include class weights, over-sampling, under-sampling, hard-negative mining, synthetic examples, and threshold tuning after training. The right answer depends on the cost of false positives versus false negatives and whether the rare class examples are representative or noisy.
 
 ---
 
 ## Question 29
 
-**What are the risks of LoRA or adapter-based tuning?**
+**What is the difference between a confidence interval and a credible interval?**
 
 ### Sample Answer
 
-The adapter can overfit a narrow dataset, improve the target task while hurting general behavior, or weaken safety behavior in slices not covered by evals. Deployment can also fail if the adapter is paired with the wrong base model, tokenizer, config, or quantization setup. A LoRA adapter should be tracked with its base model, data version, training config, and eval results.
+A confidence interval is frequentist: over repeated experiments, the procedure would produce intervals containing the true value a certain fraction of the time. It does not say there is a 95% probability that this specific interval contains the true value. A credible interval is Bayesian: given the prior and observed data, it directly describes posterior probability over the parameter. In applied evals, the key is to communicate uncertainty without overstating what the interval proves.
 
 ---
 
 ## Question 30
 
-**Why might a deployed model be trained beyond the Chinchilla-optimal token count?**
+**When would you use a t-test versus a chi-squared test?**
 
 ### Sample Answer
 
-Chinchilla-style rules optimize pretraining loss for a fixed pretraining compute budget, but deployed models are optimized over pretraining, post-training, and inference economics. If a model will serve massive traffic, extra training can be worthwhile if it improves quality, reduces active inference cost, or makes a smaller/sparser model viable. The practical objective is not only "best pretraining loss per FLOP"; it is user value per total lifecycle compute.
+A t-test compares means of a continuous quantity, such as whether one model has a higher average score than another under appropriate assumptions. A chi-squared test is used for categorical counts, such as whether pass/fail outcomes differ across systems or whether two categorical variables appear independent. In AI evals, both require care because examples may be dependent, slices may be small, and practical significance can matter more than statistical significance.
 
 ---
 
 ## Question 31
 
-**How do pretraining, RL, and inference compute costs differ?**
+**What is a p-value and what are its limitations?**
 
 ### Sample Answer
 
-Pretraining is roughly forward plus backward over large batches, often estimated as about $6ND$ FLOPs. Inference is forward-only, roughly $2ND$, but decode can have poor hardware utilization because it is sequential and memory-bandwidth-bound. RL or post-training can include rollout generation, reward scoring, and policy updates, so its cost is not just the number of training tokens. A good estimate must account for decode inefficiency, reward models, environment calls, and what fraction of rollouts actually receive backward updates.
+A p-value is the probability of observing a result at least as extreme as the one measured, assuming the null hypothesis is true. It is not the probability that the null is true, and it does not measure effect size or product importance. P-values can be abused through repeated testing, selective reporting, and p-hacking. In model evaluation, use them alongside effect sizes, confidence intervals, pre-registered comparisons, and slice-level judgment.
 
 ---
+
+## Question 32
+
+**What is the difference between Type I and Type II errors?**
+
+### Sample Answer
+
+A Type I error is a false positive: rejecting a true null hypothesis. A Type II error is a false negative: failing to reject a false null hypothesis. In ML product terms, a Type I error might block a safe release or flag a legitimate user as fraudulent; a Type II error might ship a real regression or miss actual fraud. The acceptable tradeoff depends on the cost of each error.
+
+---
+
+## Question 33
+
+**What is feature importance and what are its limitations?**
+
+### Sample Answer
+
+Feature importance estimates how much features contribute to a model or its predictions. Common methods include model-native importance for trees, permutation importance, and SHAP-style attributions. Limitations are important: correlated features can split or distort importance, importance is not causality, global importance can hide slice-specific behavior, and explanations can change when the model or data distribution changes. Use feature importance as debugging evidence, not as ground truth.
+
+---
+
+## Question 34
+
+**What are common sources of data leakage in ML?**
+
+### Sample Answer
+
+Data leakage happens when training or evaluation uses information that would not be available at prediction time. Common sources include fitting preprocessors on the full dataset before splitting, using future data in time-series features, target leakage through proxy variables, duplicate users or documents across train/test, and random cross-validation when splits should be time-based or group-based. Leakage creates inflated offline metrics that collapse in production.

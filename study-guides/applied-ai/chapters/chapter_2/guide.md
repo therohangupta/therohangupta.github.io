@@ -1,25 +1,26 @@
 ---
 layout: page
-title: "Chapter 2: Retrieval and Memory Systems"
+title: "Chapter 2: LLM Engineering"
 guide_type: chapter
 ---
 
-This chapter explains how to ground an LLM in information that is not already in the prompt or model weights.
+# Chapter 2 — LLM Engineering
 
-Chapter 1 answered: "How do I control the model at runtime?"
+This chapter turns the LLM from a probabilistic text model into a usable system component.
 
-This chapter answers: "How do I give the model the right external knowledge at the right time, and how do I decide what the system should remember?"
+Chapter 0 answered: "How does the model work?"
 
-The interview signal is not whether you can say "use RAG." It is whether you can reason about:
+This chapter answers: "How do I make it useful, reliable, debuggable, and cheap enough to run?"
 
-* how documents become searchable units
-* how queries become retrieval requests
-* how dense, sparse, and hybrid retrieval differ
-* how retrieved evidence becomes safe context
-* how memory is written, read, compressed, and forgotten
-* how the system fails when information is stale, noisy, poisoned, or too large
+The interview angle here is usually not "can you recite prompt tips." It is:
 
-Retrieval is the external knowledge layer. Memory is the persistent state layer. Together they turn an LLM from a stateless text generator into a system that can use private data, cite sources, remember user preferences, and adapt across sessions.
+* can you shape model behavior without changing weights?
+* can you build a tool-using system that does not collapse under edge cases?
+* can you structure outputs, state, retries, evaluation, and fallbacks?
+* can you explain why your system will fail in production before it fails?
+* can you keep untrusted prompts, retrieved context, and tool outputs from becoming unauthorized actions?
+
+Security note: Chapter 2 covers runtime control. For the deeper treatment of prompt injection, trusted vs untrusted context, tool authorization, and structured-output validation as a security boundary, see [Chapter 8: Security, Privacy, and Trust Boundaries](../chapter_8/guide.html).
 
 ---
 
@@ -32,1228 +33,1543 @@ Retrieval is the external knowledge layer. Memory is the persistent state layer.
 
 # 1. The Core Mental Model
 
-An LLM only sees the tokens in its context window.
+Treat an LLM as a conditional distribution:
 
-Retrieval is the process of deciding which external information deserves to become part of that context window.
+$$
+P(y \mid x)
+$$
 
-Memory is the process of deciding which past information should survive beyond the current request.
+LLM engineering is the art of controlling:
 
-The simplest retrieval-augmented generation flow is:
+* `x`, the input context
+* the allowed output space
+* the sequence of actions over time
+* the feedback loop that improves the system
 
-1. User asks a question.
-2. System rewrites or normalizes the query.
-3. Retriever searches documents or memories.
-4. Reranker sorts candidates by usefulness.
-5. Context builder packs the best evidence into the prompt.
-6. Model answers using that evidence.
-7. System optionally writes new memory.
+In other words:
 
-The key idea is:
+Prompting = shape the input
+Sampling = shape the randomness
+Tools = extend capability
+Memory = preserve useful state
+Orchestration = control the loop
+Evaluation = measure and improve
 
-> Retrieval is not "find text that looks similar." Retrieval is controlled information selection under latency, cost, and context constraints.
-
-That is why production RAG is mostly about engineering the information path:
-
-* what gets indexed
-* how it gets chunked
-* what metadata it carries
-* what query is searched
-* how candidates are scored
-* what evidence is shown to the model
-* what the model is allowed to claim
+That is the entire chapter in one sentence.
 
 ---
 
-# 2. Retrieval Primitives
+# 2. Prompting as Behavior Control
 
-Retrieval systems are built from a small set of primitives.
+Prompting is not just writing nicer instructions. It is a method for steering the conditional distribution of outputs without changing model weights.
 
-## 2.1 Embeddings
+## 2.1 Prompt as Interface
 
-An embedding maps text into a vector:
+A prompt usually has four parts:
 
-```text
-text -> embedding model -> [0.12, -0.04, 0.81, ...]
-```
+* instruction
+* context
+* examples
+* output format
 
-The vector is a learned representation of semantic meaning. Similar texts should land near each other in vector space.
+These parts are not equivalent.
 
-Embeddings exist because keyword overlap is not enough. A user might ask:
+### Instruction
 
-> "How do I reset billing access?"
+Tells the model what role it should play.
 
-The relevant document might say:
+Example:
 
-> "To restore invoice permissions, update the user's finance role."
+* summarize this document
+* extract entities
+* write a JSON object
+* compare two options
 
-Lexical search may miss this because the words differ. Dense embeddings can match the meaning.
+### Context
 
-Important embedding choices:
-
-* **model**: general-purpose, domain-specific, multilingual, code-aware
-* **dimensionality**: larger vectors may capture more nuance but cost more storage and search time
-* **normalization**: cosine similarity is often implemented as dot product over normalized vectors
-* **versioning**: changing the embedding model can make old vectors incompatible with new vectors
-
-The production rule is simple:
-
-> Embedding quality sets the ceiling for dense retrieval quality.
-
-## 2.2 Similarity Search
-
-Similarity search finds nearby vectors.
-
-Common scoring functions:
-
-* **cosine similarity**: angle between vectors
-* **dot product**: useful when magnitude carries signal or vectors are normalized
-* **Euclidean distance**: geometric distance in vector space
-
-In practice:
-
-```text
-query embedding -> nearest neighbor search -> top-k candidate chunks
-```
-
-Exact nearest neighbor search compares the query against every vector. That is simple but expensive for large indexes.
-
-Approximate nearest neighbor search, or ANN, trades a small amount of recall for much lower latency.
-
-## 2.3 Indexing
-
-An index is a data structure that makes search fast.
-
-For dense retrieval, common index families include:
-
-* **flat index**: exact search, simple, high recall, slower at scale
-* **HNSW**: graph-based ANN, fast queries, memory-heavy
-* **IVF**: cluster-based ANN, searches a subset of partitions
-* **IVF-PQ**: IVF plus compression, lower memory, lower precision
-
-For sparse retrieval, the classic index is an inverted index:
-
-```text
-term -> documents containing that term
-```
-
-This is the basis for BM25, Elasticsearch, and OpenSearch.
-
-## 2.4 Chunking
-
-Chunking splits large documents into searchable units.
-
-A chunk should be small enough to retrieve precisely and large enough to contain useful context.
-
-Common strategies:
-
-* **fixed-size chunks**: simple token windows with overlap
-* **semantic chunks**: split by headings, paragraphs, or topic boundaries
-* **hierarchical chunks**: index small chunks but keep links to parent sections
-* **sliding windows**: preserve boundary context with overlap
-
-Chunking is one of the highest-leverage parts of RAG. Bad chunking can make a good embedding model look bad.
-
-## 2.5 Metadata Filtering
-
-Metadata filtering constrains retrieval using structured attributes.
+Supplies the data the model should operate on.
 
 Examples:
 
-* tenant ID
-* user ID
-* document type
-* product area
-* timestamp
-* source system
-* access-control labels
-* language
-* version
+* a document
+* a conversation history
+* retrieved passages
+* tool outputs
 
-Filtering exists because semantic similarity alone does not know whether a document is allowed, fresh, relevant to the right customer, or from the right product.
+### Examples
 
-Strong retrieval systems usually filter before or during search, not after generation.
+Show the model the desired transformation.
 
-## 2.6 Retrieval Scoring
+This is often the strongest way to shape behavior when a task is ambiguous.
 
-Retrieval scoring estimates usefulness.
+### Output format
 
-The score may combine:
-
-* vector similarity
-* BM25 score
-* recency
-* authority of the source
-* user or tenant match
-* reranker score
-* diversity penalty
-* access-control validity
-
-The important point is that "top-k nearest vectors" is only a starting point. Production scoring is often a ranking function over many signals.
-
----
-
-# 3. Memory Primitives
-
-Memory is persistent context with lifecycle rules.
-
-The four core operations are:
-
-## Write
-
-Decide whether new information should be stored.
+Constrain the answer so your software can consume it.
 
 Examples:
 
-* "The user prefers concise answers."
-* "The user is working on the Acme onboarding project."
-* "This support ticket was resolved by rotating the API key."
+* JSON
+* YAML
+* bullet list
+* short answer only
+* one line per item
 
-Writing memory should be selective. If every interaction becomes memory, the memory store fills with noise.
+## 2.2 Why Prompting Works
 
-## Read
+Prompting works because models perform in-context pattern matching.
 
-Retrieve memory that is relevant to the current request.
+The prompt gives the model a temporary local task distribution. The model then predicts what an appropriate continuation looks like under that local distribution.
 
-Memory read is usually a retrieval problem:
+The important idea is:
 
-```text
-current task -> query memory -> relevant memories -> prompt context
-```
+* the model is not being rewritten
+* the prompt changes what the model thinks the task is
 
-Read policy matters. Identity memory should not automatically mix with task memory unless it helps.
+### Prompting as Privileged Teacher Context
 
-## Compress
+Prompting is usually a runtime control technique, but it can also create a teacher for later training.
 
-Condense many memories into a smaller representation.
-
-Examples:
-
-* summarize a long conversation
-* merge repeated preferences into one stable preference
-* extract durable facts from episodic logs
-
-Compression exists because memory grows faster than context windows and human attention.
-
-## Forget
-
-Delete, expire, hide, or downgrade memory.
-
-Forgetting is not an afterthought. It is required for:
-
-* privacy
-* correctness
-* freshness
-* cost control
-* user trust
-
-The strongest memory systems have explicit retention policies instead of accumulating everything forever.
-
----
-
-# 4. How Retrieval Pipelines Compose
-
-A production retrieval pipeline usually has more stages than a demo.
-
-```text
-user request
-  -> query understanding
-  -> query rewriting
-  -> metadata filter construction
-  -> dense retrieval
-  -> sparse retrieval
-  -> candidate merge
-  -> reranking
-  -> context construction
-  -> generation
-  -> citation verification
-  -> memory write decision
-```
-
-Each stage fixes a different bottleneck.
-
-Query rewriting fixes the mismatch between conversational user text and searchable document language.
-
-Metadata filters fix scope and permission errors.
-
-Dense retrieval fixes semantic mismatch.
-
-Sparse retrieval fixes exact identifiers, rare terms, error codes, names, and abbreviations.
-
-Reranking fixes noisy top-k candidates.
-
-Context construction fixes the problem of giving the model too much, too little, or poorly ordered evidence.
-
-Citation verification fixes the gap between "the model saw evidence" and "the final answer is actually grounded in that evidence."
-
----
-
-# 5. Dense, Sparse, and Hybrid Retrieval
-
-## Dense Retrieval
-
-Dense retrieval uses embeddings.
-
-Best for:
-
-* semantic similarity
-* paraphrases
-* natural language questions
-* concept matching
-* cross-lingual or domain-specific meaning if the embedding model supports it
-
-Weaknesses:
-
-* can miss exact identifiers
-* can retrieve plausible but wrong chunks
-* depends heavily on embedding model quality
-* requires vector index storage and updates
-
-Dense retrieval answers: "What is semantically similar?"
-
-## Sparse Retrieval
-
-Sparse retrieval uses lexical features like term frequency and inverse document frequency. BM25 is the common baseline.
-
-Best for:
-
-* exact terms
-* product names
-* stack traces
-* codes
-* legal citations
-* names and IDs
-
-Weaknesses:
-
-* misses paraphrases
-* depends on tokenization and analyzers
-* may overvalue keyword overlap without understanding meaning
-
-Sparse retrieval answers: "What shares important words?"
-
-## Hybrid Retrieval
-
-Hybrid retrieval combines dense and sparse candidates.
-
-A common flow:
-
-1. Run vector search for semantic candidates.
-2. Run BM25 for lexical candidates.
-3. Merge candidates with score normalization or reciprocal rank fusion.
-4. Rerank the merged candidate set.
-
-Hybrid retrieval is often the best default for enterprise RAG because real corpora contain both natural language and exact identifiers.
-
-The interview framing:
-
-> Dense search catches meaning. Sparse search catches exactness. Hybrid search reduces the chance that either failure mode dominates.
-
----
-
-# 6. Indexing and Vector Search in Practice
-
-## FAISS
-
-FAISS is a library for efficient vector similarity search. It is commonly used when you want local control over indexing, experimentation, or self-hosted retrieval.
-
-Useful FAISS index types:
-
-* `IndexFlatIP` or `IndexFlatL2` for exact baseline search
-* IVF indexes for partitioned approximate search
-* HNSW-style indexes for graph-based approximate search
-* product quantization for memory reduction
-
-FAISS is powerful but you usually need to build surrounding production pieces yourself: metadata storage, access control, ingestion, refresh, serving, and observability.
-
-## HNSW
-
-HNSW stands for Hierarchical Navigable Small World graph.
-
-It builds a graph where nearby vectors are connected. Search navigates the graph from coarse to fine layers.
-
-Best for:
-
-* low-latency ANN
-* high recall
-* dynamic-ish workloads compared with some cluster indexes
-
-Tradeoff:
-
-* high memory usage
-* index build parameters matter
-
-Important knobs:
-
-* `M`: graph connectivity
-* `efConstruction`: build-time search breadth
-* `efSearch`: query-time search breadth
-
-Increasing `efSearch` improves recall but increases latency.
-
-## IVF and ANN
-
-IVF, or inverted file indexing, partitions vector space into clusters.
-
-At query time, the system searches only the closest clusters instead of every vector.
-
-Important knob:
-
-* `nprobe`: number of clusters searched
-
-Higher `nprobe` means better recall and worse latency.
-
-IVF works well at large scale but needs careful training, partition sizing, and monitoring for recall regressions.
-
-## pgvector
-
-`pgvector` adds vector search to PostgreSQL.
-
-Best for:
-
-* small to medium corpora
-* applications already centered on Postgres
-* simple metadata joins and transactional workflows
-* prototypes that may grow into production
-
-Tradeoff:
-
-* not always the best choice for very large, high-QPS vector workloads
-* operational simplicity can matter more than raw benchmark speed
-
-## Pinecone, Weaviate, and Milvus
-
-Managed or dedicated vector databases provide indexing, serving, metadata filtering, replication, and scaling features.
-
-Pinecone is commonly used as a managed vector database.
-
-Weaviate provides vector search plus schema, hybrid search, and object-style storage.
-
-Milvus is a scalable open-source vector database often used for large deployments.
-
-The right choice depends less on marketing labels and more on:
-
-* corpus size
-* query volume
-* metadata filtering needs
-* update rate
-* deployment constraints
-* operational ownership
-
-## Elasticsearch and OpenSearch
-
-Elasticsearch and OpenSearch are strong lexical search engines and increasingly support vector search and hybrid retrieval.
-
-They are attractive when:
-
-* you already have search infrastructure
-* BM25 matters
-* filters, analyzers, and faceting matter
-* logs, documents, and text search are already indexed there
-
-They are less attractive if your workload is pure vector search at very large scale and you do not need lexical search features.
-
----
-
-# 7. Chunking and Document Modeling
-
-Chunking is where document structure becomes retrieval structure.
-
-## Fixed-Size Chunking
-
-Fixed-size chunking splits text every N tokens or characters.
-
-Benefits:
-
-* simple
-* predictable
-* easy to implement
-
-Costs:
-
-* can split a definition from its explanation
-* can separate a table header from table rows
-* can create chunks with no standalone meaning
-
-Overlap helps but increases index size and duplicate retrieval.
-
-## Semantic Chunking
-
-Semantic chunking uses natural boundaries:
-
-* headings
-* sections
-* paragraphs
-* list items
-* code blocks
-* speaker turns
-
-This usually improves retrieval because each chunk is more coherent.
-
-The cost is implementation complexity. You need parsers for Markdown, HTML, PDFs, docs, support tickets, or code.
-
-## Hierarchical Chunking
-
-Hierarchical chunking stores multiple levels:
-
-```text
-document
-  -> section
-      -> paragraph chunk
-```
-
-You can retrieve small chunks for precision, then include the parent section for context.
-
-This is useful when a single paragraph matches the query but the answer requires surrounding definitions, caveats, or examples.
-
-## Chunk Size Tradeoff
-
-Small chunks:
-
-* improve precision
-* reduce irrelevant context
-* can lose necessary surrounding information
-
-Large chunks:
-
-* preserve context
-* reduce boundary failures
-* increase noise and token cost
-
-The practical answer is not one magic chunk size. It is to evaluate retrieval quality on realistic questions and tune chunking around the corpus.
-
----
-
-# 8. Metadata Design
-
-Metadata is the difference between a demo retriever and a production retriever.
-
-Useful metadata often includes:
-
-* stable document ID
-* chunk ID
-* parent section ID
-* source URL or path
-* title
-* heading path
-* created and updated timestamps
-* tenant or customer ID
-* access-control groups
-* language
-* product area
-* document type
-* version
-* embedding model version
-
-Good metadata supports:
-
-* authorization
-* filtering
-* freshness ranking
-* deduplication
-* citation display
-* index rebuilds
-* debugging
-
-Bad metadata causes production failures that look like model failures.
-
-For example, if a user asks about version 2 of an API but the retriever returns version 1 docs, the model may answer fluently and incorrectly. The root cause is not generation. It is metadata and ranking.
-
----
-
-# 9. Retrieval Scoring and Reranking
-
-First-stage retrieval should prioritize recall. Reranking should prioritize precision.
-
-## First-Stage Retrieval
-
-First-stage retrieval collects candidates quickly.
-
-Examples:
-
-* top 50 dense candidates
-* top 50 BM25 candidates
-* recent memories from the current user
-* exact matches on IDs
-
-This stage should avoid missing the answer.
-
-## Score Merging
-
-Dense and sparse scores are not naturally comparable.
-
-Common merge techniques:
-
-* normalize scores into a common range
-* use weighted sums
-* use reciprocal rank fusion
-* keep separate candidate pools and let reranking decide
-
-Reciprocal rank fusion is popular because it uses ranks instead of raw scores:
-
-```text
-score(doc) = sum(1 / (k + rank_in_list))
-```
-
-It is simple and robust when score scales differ.
-
-## Rerankers and Cross-Encoders
-
-A reranker scores a query-document pair more carefully than first-stage retrieval.
-
-Cross-encoders read the query and candidate chunk together:
-
-```text
-reranker(query, candidate_text) -> relevance score
-```
-
-They are usually more accurate than embedding similarity but slower because each query-candidate pair requires model inference.
-
-Use rerankers when:
-
-* top-k quality matters
-* documents are noisy
-* first-stage retrieval returns many plausible candidates
-* the answer depends on exact relevance, not just semantic neighborhood
-
-Tradeoff:
-
-* better precision
-* higher latency and cost
-
----
-
-# 10. Query Rewriting
-
-User questions are often bad search queries.
-
-Examples:
-
-* "What about the thing from yesterday?"
-* "Can I do this for enterprise accounts?"
-* "Why did it fail?"
-
-Query rewriting turns conversational input into searchable text.
-
-Common rewrite operations:
-
-* resolve pronouns using conversation history
-* expand abbreviations
-* add product or tenant context
-* generate multiple query variants
-* extract filters from natural language
-* separate semantic query text from structured constraints
+In self-distillation, the student may see the normal user prompt while the teacher sees the same prompt plus extra hints, corrections, or task instructions. The privileged prompt is not meant to be served to users forever. It is used to create a training signal so the future student can learn the behavior without the hint.
 
 Example:
 
 ```text
-User: "Can I do this for enterprise accounts?"
-Rewrite: "Does the bulk invoice export feature support enterprise accounts?"
-Filters: product_area=billing, account_type=enterprise
+student prompt:
+What are creative waffle toppings beyond maple syrup?
+
+teacher prompt:
+same prompt
++ always spell "pineapple" as "pinapple" when tropical food is relevant
+
+training signal:
+shift the student distribution only where the teacher-student disagreement matters
 ```
 
-Query rewriting improves recall, but it can also inject wrong assumptions. A good system logs both the original and rewritten query so failures can be debugged.
+This connects prompting to Chapter 5's learning-loop view: the prompt changes the local conditioning distribution, and distillation can later compress that privileged context into weights.
+
+## 2.3 Prompting as Soft Programming
+
+A good prompt is like a soft program:
+
+* not deterministic
+* not perfect
+* but often enough to shape behavior toward a useful region
+
+That is why prompts are powerful but fragile.
+
+## 2.4 Failure Modes of Prompting
+
+Prompting breaks in predictable ways:
+
+* vague instructions lead to vague answers
+* conflicting instructions lead to unstable behavior
+* too many instructions overwhelm the model
+* examples that are too weird distort behavior
+* hidden assumptions make the model answer the wrong question
+
+A strong interviewer answer should mention that prompt quality is partly about reducing ambiguity, not just being verbose.
 
 ---
 
-# 11. Context Construction
+# 3. Prompt Taxonomy
 
-Context construction decides what the model actually sees.
+There are several distinct prompting patterns. You should know all of them.
 
-This is not the same as retrieval. Retrieval returns candidates. Context construction builds the prompt.
+## 3.1 Zero-shot Prompting
 
-Important choices:
+Ask the task directly without examples.
 
-* how many chunks to include
-* whether to include summaries or raw text
-* whether to group chunks by source
-* how to order evidence
-* how to include metadata and citations
-* how much conversation history to keep
-* where to place the strongest evidence
+Use when:
 
-## Lost-in-the-Middle Mitigation
-
-Models often use information at the beginning and end of long contexts more reliably than information buried in the middle.
-
-Mitigations:
-
-* put the most relevant evidence first
-* repeat critical constraints near the answer instruction
-* group related chunks together
-* keep context shorter when possible
-* use summaries to compress low-priority evidence
-* place source IDs close to quoted evidence
-
-More context is not automatically better. More irrelevant context can make the answer worse.
-
----
-
-# 12. Citations and Grounding
-
-Grounding means the answer is supported by evidence.
-
-Citations are the user-visible trace from answer claims to evidence.
-
-A good citation system needs:
-
-* stable source IDs
-* chunk-to-document mapping
-* page, section, URL, or timestamp metadata
-* answer instructions that require source attribution
-* post-generation checks for unsupported claims
-
-There is a subtle failure mode:
-
-> The model can cite a document it saw without the claim actually being supported by that document.
-
-So citations should not be treated as proof by themselves. Stronger systems verify that cited spans contain the claimed information.
-
-Practical grounding pattern:
-
-1. Ask the model to answer only from supplied evidence.
-2. Require citations for factual claims.
-3. Reject or flag claims without citation.
-4. Optionally run a verifier over answer-citation pairs.
-
----
-
-# 13. Memory Systems
-
-Memory is retrieval over a special corpus: the system's past interactions and learned state.
-
-## 13.1 Short-Term Context Memory
-
-Short-term memory is the working context of the current session.
-
-Examples:
-
-* recent messages
-* current task state
-* active tool results
-* temporary goals
-
-It is usually kept in the prompt, a session store, or a conversation buffer.
+* the task is simple
+* the model already knows the transformation
+* you want low prompt overhead
 
 Tradeoff:
 
-* easy to use
-* quickly hits context limits
-* can carry stale assumptions forward
+* lower prompt cost
+* more variance
 
-## 13.2 Long-Term Vector Memory
+## 3.2 Few-shot Prompting
 
-Long-term vector memory stores durable facts or episodes in a searchable index.
+Provide examples of input-output pairs.
 
-Examples:
+Use when:
 
-* user preferences
-* past decisions
-* resolved issues
-* project facts
+* the task is subtle
+* the output format matters
+* you want the model to infer hidden style or policy
 
-Read path:
+Why it works:
 
-```text
-current request -> embed query -> retrieve relevant memories -> inject selected memories
-```
+* examples act like in-context demonstrations
+* the model infers the latent task from the examples
 
-Write path:
+## 3.3 Instruction Prompting
 
-```text
-interaction -> memory extraction -> validation -> storage with metadata
-```
+Give a precise natural-language specification.
 
-Long-term memory should be scoped by user, workspace, tenant, and sensitivity.
+Use when:
 
-## 13.3 Episodic vs Semantic Memory
+* task is clearly defined
+* you can describe constraints directly
 
-Episodic memory stores events:
+## 3.4 Role Prompting
 
-* "On May 3, the user asked to migrate billing jobs to a queue."
-* "Ticket 1842 was fixed by updating the webhook secret."
-
-Semantic memory stores generalized facts:
-
-* "The user prefers Python examples."
-* "The billing service uses Stripe webhooks."
-
-Episodic memory is useful for auditability and temporal context. Semantic memory is useful for personalization and durable knowledge.
-
-Strong systems often derive semantic memory from repeated episodic evidence.
-
-## 13.4 Summarization Memory
-
-Summarization memory compresses long histories.
-
-Useful patterns:
-
-* rolling session summary
-* project summary
-* decision log
-* user preference summary
-* unresolved tasks summary
-
-The risk is summary drift. If a summary is wrong, every later answer may inherit that wrong state.
-
-Mitigation:
-
-* preserve links to source episodes
-* update summaries conservatively
-* allow memory inspection and correction
-
-## 13.5 Identity and Personalization Memory
-
-Identity memory stores stable user-specific preferences or facts.
+Assign a role.
 
 Examples:
 
-* preferred language
-* preferred answer length
-* timezone
-* project role
-* recurring constraints
+* you are a careful data extractor
+* you are a skeptical reviewer
+* you are a senior software engineer
 
-This memory can improve product experience, but it has privacy and trust implications.
+Role prompts are often a shorthand for changing style and priority structure.
 
-Rules of thumb:
+## 3.5 Decomposition Prompting
 
-* do not infer sensitive attributes casually
-* keep identity memory scoped and inspectable
-* distinguish user-stated facts from model-inferred guesses
-* let users delete or correct memory
+Break a task into substeps.
 
-## 13.6 Forgetting Policies
+Example:
 
-Forgetting policies decide when memory should be removed or downgraded.
+* identify entities
+* classify them
+* then produce final output
 
-Common policies:
+Useful when the task is too hard to do in one pass.
 
-* time-to-live expiration
-* max memory count per user or project
-* sensitivity-based retention
-* recency decay in ranking
-* explicit user deletion
-* confidence-based pruning
-* merge duplicates into summaries
+## 3.6 Self-consistency / Multi-sample Prompting
 
-Forgetting improves quality because stale facts are often worse than missing facts.
+Generate multiple candidate answers and choose the most consistent one.
+
+This is a simple but powerful way to reduce randomness.
+
+## 3.7 Critique and Revise
+
+Ask the model to generate, then critique its own answer, then rewrite.
+
+This can improve quality when the model is capable of self-correction.
 
 ---
 
-# 14. Real Implementation Patterns
+# 4. Prompt Design Principles
 
-## 14.1 Ingestion Pipeline
+This is where a lot of practical engineering lives.
 
-A practical ingestion pipeline:
+## 4.1 Be Explicit About the Goal
 
-1. Load documents from source systems.
-2. Parse into structured text.
-3. Split into chunks.
-4. Attach metadata.
-5. Compute embeddings.
-6. Upsert vectors and metadata into an index.
-7. Store raw source text in durable storage.
-8. Record index and embedding versions.
+Do not assume the model knows what optimization criterion you care about.
 
-Important operational details:
+Bad:
 
-* make ingestion idempotent
-* track deleted documents
-* support partial reindexing
-* keep source-of-truth IDs stable
-* log chunk counts and embedding failures
+* make this better
 
-## 14.2 Retrieval Cache
+Better:
 
-Retrieval caches store results for repeated queries or repeated embeddings.
+* make this shorter while preserving all factual details and action items
 
-Cache layers:
+## 4.2 Put Constraints in Priority Order
 
-* query rewrite cache
-* embedding cache
-* retrieval result cache
-* reranking cache
-* final answer cache for deterministic FAQ-style systems
+If a prompt has multiple constraints, rank them.
 
-Cache keys should include:
+Example:
 
-* normalized query
-* filters
-* index version
-* embedding model version
-* user or tenant scope
+1. output valid JSON
+2. do not invent facts
+3. keep each field under 30 words
 
-If the cache key ignores permissions or index version, it can return unsafe or stale results.
+## 4.3 Separate Facts From Instructions
 
-## 14.3 Hybrid Search Flow
+If context and instructions are mixed together, the model can confuse them.
 
-A robust hybrid flow:
+A clean prompt usually makes the boundaries obvious.
 
-1. Build structured filters from user, tenant, permissions, and query.
-2. Run BM25 for exact lexical candidates.
-3. Run dense vector search for semantic candidates.
-4. Merge candidates with reciprocal rank fusion.
-5. Remove duplicates using stable document and chunk IDs.
-6. Rerank the top candidates.
-7. Build context with source metadata.
+## 4.4 Reduce Ambiguity
 
-This flow is common because it handles both "what does this mean?" and "find this exact thing."
+Ambiguous instructions force the model to guess latent intent.
 
-## 14.4 Reranking Pipeline
+If the task has multiple plausible interpretations, either specify the preference or give a decision rule.
 
-Reranking usually runs after candidate generation:
+## 4.5 Use Examples When Rules Are Hard to State
+
+Some tasks are easier to demonstrate than to define.
+
+Examples are especially useful for:
+
+* extraction
+* normalization
+* formatting
+* classification edge cases
+* style imitation
+
+---
+
+# 5. Sampling and Decoding Control
+
+Prompting controls what the model sees. Sampling controls how the model chooses among plausible outputs.
+
+## 5.1 Greedy Decoding
+
+Always choose the highest probability next token.
+
+Pros:
+
+* deterministic
+* cheap
+
+Cons:
+
+* can be repetitive
+* can get stuck in low-quality local choices
+
+## 5.2 Temperature
+
+Temperature changes how peaked the next-token distribution is.
+
+* low temperature: more conservative
+* high temperature: more diverse
+
+Conceptually:
+
+* low temperature sharpens the distribution
+* high temperature flattens it
+
+## 5.3 Top-k Sampling
+
+Restrict sampling to the k most likely tokens.
+
+Useful when you want diversity without letting the model wander too far.
+
+## 5.4 Top-p Sampling
+
+Restrict sampling to the smallest set of tokens whose probability mass exceeds p.
+
+This adapts to the shape of the distribution.
+
+## 5.5 Beam Search
+
+Search over several candidate continuations.
+
+Useful in some structured generation settings, but often produces bland answers for open-ended text.
+
+## 5.6 Decoding Tradeoff Summary
+
+* deterministic decoding is easier to debug
+* stochastic decoding can improve creativity and coverage
+* production systems often want a constrained form of stochasticity, not pure randomness
+
+---
+
+# 6. Structured Outputs
+
+This is one of the most important applied engineering topics.
+
+The LLM may be good at language, but your system often needs a machine-readable object.
+
+## 6.1 Why Structured Outputs Matter
+
+Free-form text is hard to consume.
+
+Systems usually need:
+
+* JSON objects
+* schema-constrained records
+* function arguments
+* typed labels
+* lists of extracted fields
+
+Structured outputs reduce entropy in the response space and make downstream automation much safer.
+
+## 6.2 Common Structured Output Methods
+
+### A. Prompt-only formatting
+
+You ask for JSON in the prompt.
+
+This is simple but brittle.
+
+### B. Schema-guided generation
+
+The tool/runtime enforces a schema.
+
+This is much more reliable.
+
+### C. Post-processing
+
+You parse and validate after generation.
+
+This is necessary even if you have schema-guided decoding.
+
+## 6.3 Common Output Shapes
+
+* single object
+* list of objects
+* classification label
+* key-value map
+* action plan with steps
+* tool call arguments
+
+## 6.4 Failure Modes
+
+* invalid JSON
+* extra commentary outside the schema
+* missing required fields
+* hallucinated values
+* field type mismatch
+
+## 6.5 Good Interview Framing
+
+If asked how to build reliable structured generation, say:
+
+* constrain the output format as much as possible
+* validate the output
+* repair or retry when parsing fails
+* use smaller, narrower schemas
+* never trust raw free-form text when a typed object is needed
+
+## 6.6 Concrete Implementation Stack
+
+In a real application, structured output usually becomes a small pipeline:
 
 ```text
-top 100 candidates -> cross-encoder reranker -> top 5 to 10 context chunks
+prompt template
+  -> model call with schema / tool definition
+  -> JSON parser
+  -> schema validator
+  -> business-rule validator
+  -> retry / repair / fallback
+  -> typed object used by downstream code
 ```
 
-Production considerations:
+Common choices:
 
-* cap candidate count to control latency
-* batch reranker calls
-* cache repeated query-candidate scores
-* use a cheaper reranker for low-risk queries
-* skip reranking when first-stage score confidence is high
+* **JSON Schema / Pydantic / Zod** for type validation.
+* **OpenAI structured outputs or tool calling** when the runtime can constrain generation.
+* **Instructor, Guardrails, LangChain output parsers, or custom validators** when the team wants a wrapper around parsing and retries.
+* **Strict enums and small schemas** for classification, routing, and extraction.
+* **Business-rule validators** for constraints the schema cannot express, such as "refund amount must be less than original payment."
 
-## 14.5 Memory Write Pipeline
+The important implementation detail is that schema validity is not the same as correctness. This JSON can be valid and still wrong:
 
-Memory writes should be treated like state mutations, not casual logging.
+```json
+{"priority": "low", "requires_human_review": false}
+```
 
-A safer write pipeline:
-
-1. Extract candidate memory from the interaction.
-2. Classify memory type: preference, fact, episode, task, identity.
-3. Check sensitivity and policy.
-4. Check whether similar memory already exists.
-5. Update, merge, or insert.
-6. Attach source, timestamp, scope, and confidence.
-
-The important distinction:
-
-* logs record what happened
-* memory stores what should influence future behavior
-
----
-
-# 15. Tradeoffs and Performance
-
-## 15.1 Latency
-
-Retrieval adds latency before generation.
-
-Latency sources:
-
-* query rewriting model call
-* embedding call
-* vector search
-* BM25 search
-* metadata filtering
-* reranking model call
-* context construction
-
-Common optimizations:
-
-* cache embeddings
-* parallelize dense and sparse retrieval
-* cap candidate counts
-* use approximate indexes
-* batch reranker requests
-* skip expensive stages for easy queries
-
-## 15.2 Cache Hit Rate
-
-Caching can make retrieval cheap, but only for repeated or normalized queries.
-
-High cache hit rate is more likely when:
-
-* queries are FAQ-like
-* filters are stable
-* documents change slowly
-* query rewriting normalizes variations
-
-Low cache hit rate is common in open-ended conversational systems.
-
-## 15.3 Index Update Cost
-
-Indexes are not free to update.
-
-Update costs include:
-
-* embedding new or changed chunks
-* deleting stale chunks
-* rebuilding ANN structures
-* warming caches
-* maintaining consistency between metadata and vectors
-
-High-write systems need different design than mostly static documentation systems.
-
-## 15.4 Memory Growth
-
-Memory grows with usage.
-
-If unchecked, memory growth causes:
-
-* higher storage cost
-* slower retrieval
-* more irrelevant recalls
-* privacy risk
-* worse personalization due to stale facts
-
-Compression and forgetting are performance features, not just product features.
-
-## 15.5 Precision and Recall
-
-Retrieval precision means the returned chunks are relevant.
-
-Retrieval recall means the system finds the chunks that contain the answer.
-
-Tradeoff:
-
-* high recall first-stage retrieval returns more candidates and costs more downstream
-* high precision context reduces model confusion but risks missing useful evidence
-
-RAG systems often optimize for recall early and precision late:
+For a medical, financial, legal, or account-access workflow, the system also needs policy checks, grounding checks, and sometimes human review. In interviews, call out this split:
 
 ```text
-retrieve broadly -> rerank carefully -> include selectively
+syntax validity != semantic validity != business safety
 ```
 
-## 15.6 Cost
+### Example: extraction flow
 
-Cost comes from:
+A robust extraction service might do:
 
-* embedding generation
-* vector database storage
-* query volume
-* reranker inference
-* longer prompts
-* observability and evaluation
+1. build a prompt with clear field definitions,
+2. call the model with a schema,
+3. validate required fields and types,
+4. check extracted values against source spans,
+5. retry once with the validation error,
+6. route to human review if the second attempt fails.
 
-Long context can hide retrieval quality problems but increase model cost. Better retrieval often reduces generation cost by shrinking prompts.
+That is much more realistic than "ask the model for JSON."
 
 ---
 
-# 16. Failure Modes
+# 7. Tool Use
 
-## 16.1 Bad Chunking
+Tool use is how LLM systems gain capabilities they do not have intrinsically.
 
-Symptoms:
+## 7.1 Why Tools Are Needed
 
-* retrieved chunks look related but do not contain the answer
-* answers miss important caveats
-* citations point to vague passages
+LLMs are weak at:
 
-Cause:
+* exact arithmetic
+* up-to-date facts
+* deterministic side effects
+* persistent state changes
+* reliable multi-step workflows
 
-* chunks are too small, too large, or split across semantic boundaries
+Tools solve this by moving certain operations outside the model.
 
-Fix:
+## 7.2 Tool Abstraction
 
-* evaluate chunking on real questions
-* use semantic or hierarchical chunking
-* preserve headings and parent context
-
-## 16.2 Stale Memory
-
-Symptoms:
-
-* the assistant remembers old preferences
-* outdated project facts override current instructions
-* users lose trust
-
-Fix:
-
-* timestamps
-* recency decay
-* explicit updates
-* user-visible memory controls
-* expiration policies
-
-## 16.3 Retrieval Poisoning
-
-Retrieval poisoning happens when malicious or low-quality content enters the retrievable corpus.
+A tool is a function from input to output.
 
 Examples:
 
-* a document says "ignore all previous instructions"
-* a support ticket contains untrusted user text
-* a web page injects prompt instructions
+* search(query)
+* retrieve(doc_id)
+* calculate(expression)
+* send_email(to, subject, body)
+* query_database(sql)
 
-Fix:
+The model decides when to call a tool and what arguments to pass.
 
-* treat retrieved text as data, not instructions
-* separate system instructions from evidence
-* sanitize untrusted sources
-* rank by source authority
-* use allowlisted corpora for high-risk workflows
+## 7.3 Tool Calling Loop
 
-## 16.4 Embedding Drift
+The basic loop is:
 
-Embedding drift happens when embeddings are produced by different models or versions.
+1. model proposes an action
+2. runtime executes the tool
+3. tool result comes back
+4. model uses result to continue
 
-Symptoms:
+This is the basis of most agent systems.
 
-* retrieval quality changes after model upgrade
-* new documents behave differently from old documents
-* similarity scores become less meaningful
+## 7.4 Tool Use Patterns
 
-Fix:
+### Lookup pattern
 
-* version embeddings
-* re-embed full indexes when changing models
-* compare recall before and after migration
+Ask a tool for missing information.
 
-## 16.5 Noisy Top-K Results
+### Action pattern
 
-Dense search often returns semantically adjacent but answer-irrelevant chunks.
+Ask a tool to do something in the world.
 
-Fix:
+### Verify pattern
 
-* hybrid search
-* reranking
-* better chunking
-* metadata filters
-* query rewriting
-* diversity controls
+Use a tool to check the model’s own answer.
 
-## 16.6 Context Overload
+### Chain pattern
 
-Too much retrieved context can make the model worse.
+Use multiple tools in sequence.
 
-Symptoms:
+## 7.5 Tool Use Failure Modes
 
-* answer cites irrelevant sources
-* model misses the key fact
-* answer blends conflicting documents
+* hallucinated tool names
+* wrong arguments
+* wrong ordering of calls
+* tool output misread as final answer
+* infinite loops
+* stale cached tool results
 
-Fix:
+## 7.6 Engineering Principle
 
-* reduce top-k
-* rerank
-* group evidence
-* summarize low-priority context
-* resolve conflicting sources before generation
+Tools should be treated like external dependencies in software engineering:
 
-## 16.7 Metadata Mismatch
+* validate inputs
+* handle failures
+* retry carefully
+* make calls idempotent when possible
+* log everything
 
-Metadata mismatch happens when filters do not match how documents are labeled.
+## 7.7 Concrete Tool-Calling Architecture
+
+A production tool call is not just a function name emitted by the model. It is usually mediated by a host runtime:
+
+```text
+model proposes tool call
+  -> tool registry checks name
+  -> argument schema validation
+  -> authorization / permission check
+  -> idempotency key generation
+  -> timeout / retry policy
+  -> tool execution
+  -> result normalization
+  -> observation appended to context
+```
+
+Common implementation choices:
+
+* **Tool registry:** a map of allowed tool names to callable functions and schemas.
+* **Argument validation:** Pydantic, Zod, JSON Schema, protobuf, or typed SDK definitions.
+* **Permission layer:** user/session scopes determine which tools are available.
+* **Idempotency keys:** prevent repeated writes if an agent retries.
+* **Timeouts and circuit breakers:** prevent slow tools from freezing the whole workflow.
+* **Result shaping:** tool outputs are summarized or normalized before being put back into the model context.
+* **Tracing:** every prompt, tool call, arguments object, result, latency, and error should be logged.
+
+The highest-signal interview move is to say that tools should be exposed as a narrow API, not as arbitrary code execution. For example, prefer:
+
+```text
+refund_order(order_id, reason_code)
+```
+
+over:
+
+```text
+run_sql("UPDATE payments ...")
+```
+
+The first gives the system a bounded action space. The second gives the model too much authority and makes validation harder.
+
+---
+
+# 8. Agentic Systems
+
+Once the model can use tools, you can build an agent.
+
+## 8.1 Agent Definition
+
+An agent is:
+
+LLM + state + tools + loop + stopping rule
+
+That last part matters. Without a stopping rule, the agent may not know when to stop acting.
+
+## 8.2 Agent Loop
+
+A generic loop looks like this:
+
+* observe state
+* choose action
+* execute action
+* receive observation
+* update memory/state
+* decide whether to stop
+
+## 8.3 Main Agent Architectures
+
+### ReAct
+
+The model alternates between reasoning and acting.
+
+Useful when:
+
+* the problem is open-ended
+* the agent needs to gather information progressively
+
+### Planner-executor
+
+One component plans, another executes.
+
+Useful when:
+
+* you want separation of concerns
+* you want to inspect plans before execution
+
+### Reflect-and-retry
+
+The model critiques its own result and tries again.
+
+Useful when:
+
+* mistakes are common but fixable
+* you want self-improvement without external supervision
+
+### Hierarchical agents
+
+A manager agent delegates to sub-agents.
+
+Useful when:
+
+* the task is large
+* tasks can be decomposed cleanly
+
+## 8.4 Agent Strengths
+
+Agents can handle:
+
+* long workflows
+* multi-step problem solving
+* tool coordination
+* iterative search
+* stateful tasks
+
+## 8.5 Agent Weaknesses
+
+Agents are fragile because errors compound.
+
+Common failure modes:
+
+* wrong first step poisons the rest
+* one bad retrieval leads to a bad plan
+* memory drift accumulates over time
+* loops can over-run cost and latency budgets
+* the system can be overconfident in a bad trajectory
+
+## 8.6 Practical Design Rule
+
+Do not make an agent autonomous unless the task has:
+
+* a clear success condition
+* bounded action space
+* observable intermediate results
+* acceptable failure cost
+
+If those are missing, use a guided workflow instead of a free-running agent.
+
+---
+
+# 9. State and Memory
+
+State is everything the system remembers between steps.
+
+## 9.1 Short-Term Memory
+
+This is the current context window.
+
+Pros:
+
+* simple
+* fast
+* directly available to the model
+
+Cons:
+
+* limited size
+* expensive to grow
+* noisy if overloaded
+
+## 9.2 Long-Term Memory
+
+Stored outside the context window.
 
 Examples:
 
-* product names changed
-* tenant IDs are missing
-* access labels are stale
-* document version is not tracked
+* vector database
+* SQL store
+* event log
+* profile store
+* summary store
 
-Fix:
+## 9.3 Memory Operations
 
-* validate metadata during ingestion
-* monitor empty-result rates
-* log filters used at query time
-* maintain stable taxonomies
+* write: store something useful
+* read: retrieve relevant prior state
+* summarize: compress history
+* prune: discard stale or low-value memory
+* update: revise memory after new evidence
 
----
+## 9.4 Memory Design Questions
 
-# 17. What to Say in an Interview
+Ask:
 
-If asked:
+* what should be stored?
+* how is it retrieved?
+* when does it expire?
+* how do we prevent memory from becoming clutter?
+* how do we stop retrieval from adding noise?
 
-> "How would you build retrieval for an LLM product?"
+## 9.5 Common Memory Failure Modes
 
-A strong answer is:
+* over-recall of irrelevant facts
+* stale memory causing wrong behavior
+* summary lossiness
+* identity drift across sessions
+* retrieval bias toward similar but wrong items
 
-> "I would start by modeling the corpus, because retrieval quality depends heavily on chunking and metadata. I would create semantically coherent chunks, store stable source IDs and access-control metadata, embed the chunks, and index them in a vector store. At query time I would build filters, run dense and probably sparse retrieval in parallel, merge candidates, rerank the top set, then construct a short grounded context with citations. I would evaluate retrieval separately from generation using realistic questions, and I would monitor recall, precision, latency, stale results, and unsupported claims."
+## 9.6 Good Memory Principle
 
-If asked:
+Memory should be useful, not merely large.
 
-> "Why not just put all documents in the prompt?"
-
-A strong answer is:
-
-> "Because context is expensive, limited, and noisy. Retrieval is an information selection problem. The system should choose the smallest set of high-value evidence that answers the current question while respecting permissions and freshness."
-
-If asked:
-
-> "How would you design memory?"
-
-A strong answer is:
-
-> "I would separate logs from memory. Logs record everything; memory stores only durable facts that should influence future behavior. I would define write policies, scopes, confidence, timestamps, and forgetting rules. Reads would use retrieval plus metadata filters so that only relevant and allowed memories enter the prompt."
-
-The meta-answer:
-
-> Retrieval and memory are not model tricks. They are data systems around the model. The hard parts are representation, indexing, ranking, context selection, lifecycle management, and evaluation.
+More memory can reduce quality if it is not curated.
 
 ---
 
-# 18. When Retrieval Makes Things Worse
+# 10. Retrieval-Augmented Workflows
 
-Retrieval is not automatically a quality improvement. It improves a system only when retrieved evidence is relevant, fresh, permitted, and compact enough for the model to use.
+This section overlaps with retrieval architecture, but here the focus is engineering control.
 
-Retrieval can make answers worse when:
+## 10.1 Why Retrieval Is Used
 
-* the top result is semantically similar but factually irrelevant
-* stale documents outrank current policy
-* metadata filters silently exclude the correct source
-* poisoned or user-authored content enters the evidence set
-* too many chunks crowd out the key passage
-* latency from search and reranking exceeds the product budget
-* citations create false confidence even though the cited text does not support the answer
+Retrieval helps when the model needs:
 
-The practical test is not "did retrieval run?" It is:
+* private knowledge
+* fresh knowledge
+* user-specific knowledge
+* long documents
+* sources that should be cited or grounded
+
+## 10.2 Retrieval Workflow
+
+A common pipeline:
+
+1. preprocess and chunk data
+2. embed chunks
+3. retrieve candidates
+4. rerank candidates
+5. construct context
+6. generate answer
+7. optionally cite or verify
+
+## 10.3 Retrieval Failure Modes
+
+* bad chunking
+* wrong embedding model
+* poor top-k selection
+* missing metadata filters
+* context window overload
+* irrelevant retrieved text that distracts the model
+
+## 10.4 Retrieval Is Not Magic
+
+Retrieval only helps if the right information is inserted into context in a usable form.
+
+If retrieval is wrong, the model can become more confused than if you had retrieved nothing.
+
+See also: Chapter 2's retrieval chapter for chunking, metadata, reranking, and memory lifecycle; Chapter 4 for measuring retrieval quality; and Chapter 6 for the latency and cost impact of retrieval services.
+
+---
+
+# 11. Reliability Patterns
+
+This is a core Applied AI interview area.
+
+## 11.1 Decompose the Task
+
+Instead of asking for a final answer immediately, break the problem into stages.
+
+Examples:
+
+* extract facts
+* validate facts
+* produce answer
+* check answer
+
+## 11.2 Retry
+
+If the model fails, try again.
+
+But retrying blindly is not enough. You need a changed condition:
+
+* different prompt
+* different temperature
+* different tool result
+* different subtask ordering
+
+## 11.3 Self-consistency
+
+Generate multiple answers and choose the most consistent or best-scoring one.
+
+Good for tasks where one pass is noisy.
+
+## 11.4 Verification
+
+Use a checker.
+
+Checker can be:
+
+* another model
+* a rules engine
+* a schema validator
+* a database lookup
+* a unit test
+
+## 11.5 Guardrails
+
+Guardrails are constraints that limit failure impact.
+
+Examples:
+
+* allowlisted tools only
+* blocked actions require approval
+* schemas enforced before execution
+* rate limits on repeated tool calls
+* content filters for safety
+
+## 11.6 Fallbacks
+
+When the primary model or flow fails, fall back to something safer.
+
+Examples:
+
+* simpler model
+* rule-based response
+* no action taken
+* ask for clarification
+
+## 11.7 Why Reliability Is So Hard
+
+Because failures can come from many layers:
+
+* prompt ambiguity
+* model hallucination
+* tool errors
+* retrieval noise
+* stale memory
+* orchestration bugs
+* user behavior mismatch
+
+A strong candidate can talk about all of these, not just the model.
+
+---
+
+# 12. Orchestration and Control Flow
+
+Once the system gets beyond a single prompt, you need orchestration.
+
+## 12.1 Common Orchestration Units
+
+* request router
+* prompt builder
+* retriever
+* tool executor
+* validator
+* state manager
+* logger
+* evaluator
+
+## 12.2 Common Control Flow Patterns
+
+### Linear flow
+
+One step after another.
+
+Best for simple tasks.
+
+### Branching flow
+
+Different paths depending on model or tool output.
+
+Best for mixed task types.
+
+### Looping flow
+
+Repeat until success or budget exhaustion.
+
+Best for search and agents.
+
+### Parallel flow
+
+Run multiple checks or subtasks at once.
+
+Best for speed and robustness.
+
+## 12.3 Important Engineering Concepts
+
+### Idempotency
+
+If an action is retried, it should not accidentally duplicate side effects.
+
+### Timeouts
+
+A tool or model call should fail fast when it hangs.
+
+### Cancellation
+
+If one branch succeeds, stop wasting compute on the others.
+
+### Budgets
+
+Cap token count, tool count, and wall-clock time.
+
+## 12.4 Why This Matters
+
+Without orchestration, LLM systems become expensive, hard to debug, and hard to trust.
+
+## 12.5 Reference Implementation Pattern
+
+A practical LLM workflow often looks like a typed service pipeline:
 
 ```text
-Did the retrieved context increase the probability of a correct, grounded, policy-compliant answer enough to justify the latency and cost?
+HTTP request
+  -> auth and rate limit
+  -> intent classifier
+  -> context builder / retriever
+  -> prompt renderer
+  -> model router
+  -> model call
+  -> validator
+  -> tool executor if needed
+  -> response formatter
+  -> tracing + eval logging
 ```
 
-If the answer is no, the right fix may be better chunking, stronger filters, reranking, source authority, query rewriting, smaller top-k, or no retrieval for that class of request.
+Different teams implement this with different stacks:
 
-See also: Chapter 1's retrieval-augmented workflow section for runtime control, Chapter 4's evaluation chapter for measuring retrieval quality, and Chapter 6's production chapter for the latency and cost impact of retrieval services.
+* **Simple product workflow:** FastAPI or Node service, prompt templates in code, JSON Schema validation, OpenAI/Anthropic SDK, Postgres logs.
+* **Retrieval-heavy workflow:** vector DB, reranker, prompt builder, grounded answer validator, citation checker.
+* **Agent workflow:** LangGraph-style state machine, typed state object, tool registry, budget counter, human escalation node.
+* **Enterprise workflow:** API gateway, queue, worker pool, audit logs, permission checks, feature flags, tracing dashboard.
+
+The architecture should make the non-model pieces explicit. A good production answer names the components that constrain the model:
+
+* schema,
+* validator,
+* tool permissions,
+* retry budget,
+* timeout,
+* fallback,
+* trace,
+* eval signal.
+
+If those are absent, the model is the whole system, and the system is hard to trust.
 
 ---
 
-# 19. Retrieval and Memory Takeaways
+# 13. Evaluation and Measurement
 
-If you remember only one thing:
+You cannot improve what you cannot measure.
 
-> RAG quality is mostly determined before the model answers.
+## 13.1 Offline Evaluation
 
-The most important levers are:
+Run the system on a fixed dataset.
 
-* chunking
-* metadata
-* embedding quality
-* dense/sparse/hybrid retrieval choice
-* reranking
-* context construction
-* citation verification
-* memory write and forgetting policy
+Useful for:
 
-For interviews, do not stop at "use a vector database." Explain the pipeline:
+* regressions
+* comparisons
+* controlled testing
 
-```text
-ingest -> chunk -> embed -> index -> retrieve -> rerank -> construct context -> generate -> verify -> remember or forget
-```
+## 13.2 Online Evaluation
 
-That is the full system.
+Measure behavior in production.
+
+Useful for:
+
+* true user impact
+* real failure rates
+* latency and cost
+* feedback loops
+
+## 13.3 Evaluation Dimensions
+
+You should evaluate at least:
+
+* correctness
+* completeness
+* latency
+* cost
+* refusal behavior
+* user satisfaction
+* tool success rate
+* hallucination rate
+
+## 13.4 Synthetic Evaluation
+
+Generate test cases automatically.
+
+This is especially important for agents and long workflows, where manual labels are too expensive.
+
+## 13.5 Adversarial Testing
+
+Try to break the system on purpose.
+
+Examples:
+
+* malformed input
+* conflicting instructions
+* retrieval noise
+* long context overload
+* tool failure
+* partial outages
+
+## 13.6 Regression Testing
+
+When the prompt, model, retriever, or tool changes, run the same eval suite again.
+
+That is how you prevent accidental quality loss.
+
+---
+
+# 14. Latency and Cost in LLM Engineering
+
+This matters a lot in interviews, especially for startup systems.
+
+## 14.1 What Costs Tokens
+
+* long prompts
+* long retrieved context
+* long chain-of-thought style intermediate text
+* long tool traces
+* long agent trajectories
+
+## 14.2 What Costs Time
+
+* model size
+* context length
+* number of tool calls
+* number of agent loop iterations
+* retry count
+* reranking and validation
+
+## 14.3 What Costs Money
+
+Usually a combination of:
+
+* model inference
+* vector retrieval
+* external tool calls
+* human review
+* logging and storage
+
+## 14.4 Simple Rule
+
+Every extra step should earn its keep.
+
+If a new prompt stage, retry, or tool call does not improve success rate enough to justify the added cost, it should be removed.
+
+---
+
+# 15. Production Failure Modes and Operational Patterns
+
+This is one of the most important sections for applied AI interviews.
+
+Most candidates can describe:
+
+* the happy path,
+* the architecture diagram,
+* the ideal workflow.
+
+Strong candidates can describe:
+
+* how the system fails,
+* how those failures compound,
+* how to detect them,
+* and how to contain them.
+
+This section is about the operational reality of long-running AI systems.
+
+---
+
+## 15.1 Prompt Drift
+
+Prompt drift occurs when a prompt that worked initially degrades over time.
+
+Causes include:
+
+* changing user behavior,
+* longer conversation histories,
+* new retrieval data,
+* conflicting instructions,
+* prompt accumulation,
+* hidden assumptions.
+
+### Example
+
+A customer-support prompt originally assumed:
+
+* short contexts,
+* one issue per conversation,
+* well-formatted retrieved docs.
+
+Months later:
+
+* conversations become multi-topic,
+* retrieval injects noisy snippets,
+* users ask chained questions.
+
+The original prompt now behaves unpredictably.
+
+### Important Insight
+
+Prompts are not static artifacts.
+
+They interact with:
+
+* the retrieval distribution,
+* the user distribution,
+* orchestration logic,
+* memory state.
+
+This is a form of distribution shift.
+
+---
+
+## 15.2 Context Poisoning
+
+Retrieved context can overpower instructions.
+
+The model may:
+
+* anchor on irrelevant documents,
+* absorb false assumptions,
+* follow malicious injected instructions,
+* over-trust retrieved content.
+
+### Example
+
+Suppose retrieval returns:
+
+* one highly relevant document,
+* several noisy but strongly worded documents.
+
+The model may follow the noisy documents because:
+
+* they dominate attention,
+* they appear authoritative,
+* they contain imperative phrasing.
+
+### Mitigations
+
+* reranking,
+* metadata filtering,
+* retrieval scoring,
+* instruction separation,
+* trusted-source weighting,
+* retrieval validation.
+
+---
+
+## 15.3 Agent Trajectory Collapse
+
+Agents often fail gradually, not instantly.
+
+A common pattern:
+
+1. slightly bad retrieval
+2. slightly wrong plan
+3. slightly wrong tool call
+4. corrupted state
+5. compounding downstream errors
+
+This is trajectory collapse.
+
+### Why It Happens
+
+Each step conditions future steps.
+
+Errors become part of the context distribution.
+
+The model then reasons from corrupted state.
+
+---
+
+## 15.4 Tool Feedback Loops
+
+A dangerous operational pattern:
+
+1. tool call partially fails
+2. agent retries blindly
+3. duplicate side effects occur
+4. system state diverges
+
+Examples:
+
+* duplicate purchases,
+* repeated emails,
+* repeated API writes,
+* conflicting updates.
+
+### Why This Matters
+
+LLM systems interact with the external world.
+
+Unlike pure text generation, actions are not reversible.
+
+### Important Engineering Concept: Idempotency
+
+A retried action should ideally produce the same final state rather than duplicate side effects.
+
+---
+
+## 15.5 Specification Gaming
+
+This directly connects back to Chapter 0.
+
+The model optimizes:
+
+* what you specified,
+  not:
+* what you intended.
+
+Exactly like reward hacking in RL.
+
+### Example
+
+Suppose you optimize:
+
+* short customer support responses.
+
+The model may:
+
+* become unhelpfully terse,
+* omit caveats,
+* refuse complex requests.
+
+The optimization target was incomplete.
+
+### Important Insight
+
+LLM systems are optimization systems.
+
+Misaligned objectives produce pathological behavior.
+
+---
+
+## 15.6 Orchestration Architecture Patterns
+
+Real systems rarely use one giant free-running agent.
+
+They usually use explicit orchestration structures.
+
+---
+
+### A. DAG / Workflow Architecture
+
+Tasks are arranged as explicit graph stages.
+
+Example:
+
+classifier → retriever → planner → executor → verifier
+
+### Pros
+
+* deterministic,
+* debuggable,
+* bounded cost,
+* easier evaluation.
+
+### Cons
+
+* less flexible,
+* harder to generalize.
+
+---
+
+### B. Autonomous Agent Loop
+
+The model chooses actions dynamically.
+
+### Pros
+
+* flexible,
+* adaptive,
+* handles open-ended tasks.
+
+### Cons
+
+* harder to debug,
+* unstable,
+* potentially unbounded cost.
+
+---
+
+### C. Human-in-the-Loop Systems
+
+Humans intervene:
+
+* before execution,
+* after planning,
+* only under uncertainty,
+* or only for dangerous actions.
+
+### Why These Exist
+
+Autonomous systems are often too risky for production.
+
+Human review reduces catastrophic failure probability.
+
+---
+
+### D. Multi-Model Routing
+
+Different models handle different tasks.
+
+Example:
+
+* small model → classification,
+* medium model → retrieval rewrite,
+* large model → reasoning-heavy tasks.
+
+### Why This Matters
+
+This is often the biggest practical cost optimization.
+
+Not every request needs the largest model.
+
+---
+
+## 15.7 Operational Observability
+
+Without observability, debugging production AI systems becomes nearly impossible.
+
+---
+
+### Tracing
+
+Record:
+
+* prompts,
+* retrieved docs,
+* tool calls,
+* outputs,
+* latency,
+* retries,
+* intermediate reasoning.
+
+This lets engineers reconstruct failures.
+
+---
+
+### Prompt Versioning
+
+Prompts are effectively code.
+
+You need:
+
+* version control,
+* rollback,
+* evaluation before deployment,
+* reproducibility.
+
+---
+
+### Drift Monitoring
+
+The environment changes over time:
+
+* user behavior,
+* retrieval corpus,
+* tool APIs,
+* latency distributions,
+* model updates.
+
+Systems must detect when quality degrades.
+
+---
+
+### Cost Monitoring
+
+Track:
+
+* tokens/request,
+* retrieval cost,
+* tool calls,
+* retries,
+* agent loop depth.
+
+A small orchestration bug can increase cost by 10x.
+
+---
+
+## 15.8 Cascading Failure Example
+
+A realistic production failure chain:
+
+1. retrieval index partially corrupted
+2. irrelevant docs retrieved
+3. planner produces wrong strategy
+4. executor retries invalid tool calls
+5. retries increase latency
+6. timeout handler triggers fallback
+7. fallback bypasses verification
+8. incorrect action reaches user
+
+Strong candidates can reason through chains like this.
+
+---
+
+## 15.9 Important Meta-Insight
+
+The biggest failures in production LLM systems often do NOT come from:
+
+* the transformer architecture,
+* the base model,
+* or token prediction itself.
+
+They come from:
+
+* orchestration,
+* retrieval,
+* memory,
+* retries,
+* distributed state,
+* evaluation gaps,
+* and misaligned incentives.
+
+That is why applied AI engineering increasingly looks like systems engineering.
+
+---
+
+# 16. Safety and Trust
+
+If the system can act, then safety matters.
+
+## 16.1 Types of Risk
+
+* bad information
+* harmful actions
+* unauthorized tool use
+* privacy leaks
+* overconfident wrong answers
+* irreversible side effects
+
+## 16.2 Safety Design Patterns
+
+* human approval for high-impact actions
+* least-privilege tool access
+* action logs
+* audit trails
+* content filters
+* scoped memory
+* data redaction
+
+## 16.3 Trust Principle
+
+The more the system can do, the more tightly it needs to be constrained.
+
+---
+
+# 17. How to Think About a Production LLM System
+
+A production system is usually a stack of these parts:
+
+* user interface
+* request router
+* prompt builder
+* retrieval layer
+* model inference
+* tool executor
+* state store
+* evaluator
+* monitoring and logging
+
+When an interviewer asks you to design an LLM application, they are often asking how you connect these pieces.
+
+The best answers usually discuss:
+
+* where context comes from
+* how the model is constrained
+* how failures are detected
+* how the system recovers
+* how quality is measured over time
+
+---
+
+# 18. Summary Mental Model
+
+LLM engineering is about turning a probabilistic generator into a controlled system.
+
+The main levers are:
+
+* prompt design
+* decoding strategy
+* structured outputs
+* tools
+* memory
+* orchestration
+* retries and validation
+* evaluation and safety
+
+The deeper lesson is this:
+
+> A good LLM product is not just a good model. It is a good control system around a model.
+
+---
+
+# 19. Key Tradeoffs
+
+Every LLM engineering decision lives in tension with at least one other goal:
+
+* **Control vs Flexibility** — Strict schemas and validation reduce hallucination risk, but they also reduce the model's ability to handle unexpected inputs gracefully. Over-constraining the output space can make the system brittle in novel situations.
+
+* **Reliability vs Latency** — Retries, validation loops, multi-step orchestration, and verification all improve output quality, but they add time. For interactive products, the budget for these steps is tight.
+
+* **Determinism vs Expressiveness** — Low temperature and constrained decoding produce predictable outputs, but they limit the model's creative and reasoning range. High-stakes factual tasks want determinism; open-ended generation wants expressiveness.
+
+* **Cost vs Quality** — Longer contexts, larger models, more tool calls, and additional verification steps all improve quality but increase per-request spend. The design question is not "which is better" but "where is the marginal gain no longer worth the marginal cost for this product?"
+
+* **Simplicity vs Completeness** — A single-prompt system is easy to debug and fast to ship. A multi-stage pipeline with retrieval, tools, validation, and orchestration handles more cases but is harder to reason about, test, and maintain.
+
+These tensions are not solvable — they are navigable. Strong engineering means making the tradeoff explicit, measuring both sides, and revisiting the balance as the product and traffic evolve.
 
 ---
 
 # 20. What Comes Next
 
-Chapter 3 moves from retrieval and memory into agents.
+Chapter 2 will go deep on retrieval and memory systems:
 
-Retrieval gives an LLM access to knowledge.
-Memory gives it continuity.
+* chunking
+* embeddings
+* reranking
+* hybrid search
+* long-term memory
+* context management
+* retrieval evaluation
 
-Agents add:
+That is where the system starts to feel truly agentic and enterprise-ready.
 
-* state
-* actions
-* observations
-* planning
-* execution loops
-* stopping rules
-* budgets
-
-That is where an LLM system stops being only a question-answering workflow and starts becoming a product layer that can act over time.
+[Chapter 13](../chapter_13/guide.html) connects the same LLM engineering choices to runtime behavior. Long prompts increase prefill cost, long outputs increase decode cost, structured retries add queue pressure, and tool-heavy workflows change latency budgets. The systems mental model is to ask which stage is scarce: context construction, queueing, prefill, decode, tools, network, or validation.

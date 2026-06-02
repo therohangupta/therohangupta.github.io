@@ -1,14 +1,20 @@
 ---
 layout: page
-title: "Chapter 9: Software Engineering Fundamentals for AI Systems"
+title: "Chapter 9: AI System Design"
 guide_type: chapter
 ---
 
-# Chapter 9 - Software Engineering Fundamentals for AI Systems
+# Chapter 9 — AI System Design
 
-This chapter covers the engineering layer underneath applied AI systems: Python runtime behavior, concurrency, profiling, SQL, data pipelines, and backend service design.
+This chapter is where the lower-level pieces become a product or platform.
 
-The goal is not to become a database or Python trivia machine. The goal is to explain how production AI systems actually run, fail, scale, and get debugged.
+Earlier chapters explain models, prompting, retrieval, agents, evaluation, learning, and serving. Chapter 7 asks the interview question that usually matters most in senior AI engineering loops:
+
+Can you compose those primitives into a reliable system that real users, teams, and businesses can depend on?
+
+The signal is not whether you can draw boxes. The signal is whether each box has a reason to exist, whether data flows are explicit, whether failures are contained, and whether the system improves over time without becoming unsafe, slow, or unaffordable.
+
+For full scenario practice, use the [Applied AI Capstone Scenarios](../../capstones/overview.html). They combine system design with retrieval, agents, evals, learning loops, production operations, and the security boundaries from [Chapter 10](../chapter_8/guide.html).
 
 ---
 
@@ -21,3718 +27,1227 @@ The goal is not to become a database or Python trivia machine. The goal is to ex
 
 # 1. The Core Mental Model
 
-An AI product is not just a model.
+A production AI system is not a model wrapped in an API.
 
-It is software wrapped around an expensive, probabilistic component.
+It is a control system around a probabilistic component.
 
-That means many "AI failures" are really software engineering failures:
+The model produces uncertain outputs. The system around it must decide:
 
-* the API service accepts more work than workers can handle,
-* the event loop is blocked by synchronous IO,
-* a Python process leaks memory through an unbounded cache,
-* a database query scans millions of rows on the hot path,
-* a queue hides overload until latency explodes,
-* a streaming pipeline silently changes feature distributions,
-* a retry loop turns one failure into a traffic storm,
-* a cache key forgets tenant or user identity,
-* a schema change breaks prompt construction or feature generation.
+* what context the model sees
+* what tools it may call
+* what state it may read or mutate
+* what permissions constrain it
+* what validations gate its outputs
+* what telemetry records its behavior
+* what feedback changes future behavior
 
-The model may be the most visible part of the system, but the software around it decides whether the product is fast, reliable, debuggable, safe, and affordable.
+The top-layer design question is therefore:
 
-A useful runtime mental model is:
+How do I turn uncertain reasoning into bounded, observable, recoverable product behavior?
 
-```text
-user request
-  -> API gateway
-  -> auth / quota / validation
-  -> Python service
-  -> database / cache / retrieval
-  -> queue / worker / batcher
-  -> model gateway or GPU worker
-  -> postprocessing / validation
-  -> metrics / logs / traces
-  -> response
-```
+A useful architecture separates five concerns:
 
-Every arrow can fail.
+1. User interaction: authentication, product surface, request shaping, streaming.
+2. Intelligence: prompts, retrieval, model routing, planning, tool selection.
+3. Execution: tool calls, workers, queues, transactions, human approval.
+4. Memory: conversation state, user preferences, retrieved knowledge, audit records.
+5. Improvement: traces, feedback, evals, experiments, rollouts, rollback.
 
-Strong applied AI engineers can reason about each layer:
-
-* what it does,
-* what it costs,
-* how it fails,
-* how to observe it,
-* how to recover when it breaks.
-
-The interview signal is not "can you recite the GIL" or "can you define sharding." The signal is whether you can connect fundamentals to production behavior.
-
-For example:
-
-* The GIL matters because CPU-bound Python threads will not parallelize tokenization, parsing, ranking, or feature transforms the way many people expect.
-* SQL indexes matter because a retrieval or metadata query can dominate time to first token.
-* Async matters because an orchestration service may wait on model APIs, vector databases, and tools at the same time.
-* Streaming pipelines matter because stale or skewed features can make a model look broken even when the model artifact did not change.
-* Profiling matters because guessing bottlenecks is usually wrong.
+If those concerns are mixed together, the system becomes hard to debug. A prompt change accidentally changes permissions. A retrieval bug silently changes tool behavior. A latency optimization removes evidence needed for audits. Strong system design keeps these responsibilities separate even when the first prototype is small.
 
 ---
 
-# 2. Python Runtime Fundamentals
+# 2. Example System Types
 
-Python is common in AI systems because it is productive and has the best ML ecosystem.
+The same primitives appear across many AI products, but the risk profile changes by product.
 
-But production Python has sharp edges. You need to understand enough of the runtime to predict performance and failure modes.
+## 2.1 Enterprise AI Agent Platform
 
-## 2.1 CPython, Objects, and References
+An enterprise agent platform lets multiple teams build agents that can read internal data, call business tools, and automate workflows.
 
-Most production Python means CPython.
+The hard parts are multi-tenancy, permissions, auditability, tool governance, and shared evaluation infrastructure. The platform needs a registry for tools, prompts, models, policies, datasets, and eval suites. It also needs tenant isolation so one team cannot accidentally leak another team's documents, credentials, or traces.
 
-In CPython, almost everything is an object:
+Good design emphasizes:
 
-* integers,
-* strings,
-* lists,
-* dictionaries,
-* functions,
-* classes,
-* exceptions,
-* coroutines,
-* modules.
+* central tool registry with permission metadata
+* policy engine for action approval
+* prompt and workflow versioning
+* per-tenant retrieval indexes or access-filtered shared indexes
+* tracing across model calls, tool calls, and human approvals
+* staged rollout by tenant, user group, workflow, and model
 
-Variables are references to objects, not boxes that directly contain values.
+The interview framing is: "I would design the platform so each agent is a configured workflow over shared primitives, not a one-off service with hidden permissions."
 
-```text
-name -> object
-```
+## 2.2 Coding Assistant
 
-When you pass a list to a function, you pass a reference to the same list object. When you store a response payload in a cache, that cache holds a reference. When you append a request object to a global debug list, that object cannot be freed while the list still references it.
+A coding assistant reads repository context, proposes edits, runs tools, and explains code.
 
-This matters for AI systems because requests can be large:
+The hard parts are context selection, low-latency interaction, edit safety, sandboxing, and respecting developer intent. The assistant needs repo indexing, symbol search, recent-edit awareness, terminal/tool execution, diff generation, and rollback-friendly state.
 
-* prompts,
-* retrieved documents,
-* embeddings,
-* token arrays,
-* image payloads,
-* traces,
-* tool outputs,
-* model responses.
+Good design emphasizes:
 
-One accidental reference to a large object can keep a lot of memory alive.
+* local or server-side code indexing
+* retrieval over files, symbols, commits, diagnostics, and terminal output
+* sandboxed command execution
+* patch-based edits rather than blind rewrites
+* small context windows tailored to the current task
+* evals for edit correctness, command safety, and regression avoidance
 
-## 2.2 Reference Counting
+The interview framing is: "I would treat the assistant as a stateful developer workflow system, not just a chat box over code."
 
-CPython primarily uses reference counting.
+## 2.3 Customer Support Automation
 
-Each object tracks how many references point to it. When the count reaches zero, CPython can deallocate the object immediately.
+Customer support automation answers questions, drafts replies, triages tickets, and sometimes takes actions such as refunds or account changes.
 
-Simple example:
+The hard parts are grounding, policy compliance, escalation, and safe action execution. Retrieval quality matters because one stale policy can produce costly or illegal behavior. Human review queues are central because many tasks are better framed as draft-and-approve than fully autonomous execution.
 
-```text
-x = large_payload      # refcount increases
-y = x                  # refcount increases again
-del x                  # refcount decreases
-del y                  # refcount reaches zero, object can be freed
-```
+Good design emphasizes:
 
-Reference counting gives CPython predictable cleanup for many objects. But it does not solve every memory problem.
+* retrieval over help center, policy docs, account metadata, and prior tickets
+* confidence and policy checks before answering
+* human review for refunds, account changes, and high-risk categories
+* audit logs for every source and action
+* feedback labels from agent edits, customer satisfaction, and reopen rates
 
-An object will not be freed if something still references it:
+The interview framing is: "I would separate answer generation from action authorization, because fluent text is not the same as permission to mutate customer state."
 
-* an unbounded cache,
-* a global dictionary,
-* a closure,
-* a running task,
-* a callback registry,
-* a logger context,
-* a trace buffer,
-* a pending future,
-* a cycle.
+## 2.4 Research Copilot
 
-Production memory debugging often comes down to asking:
+A research copilot helps users search, read, compare, synthesize, and cite sources.
 
-> What is still holding a reference to this object?
+The hard parts are source quality, citation faithfulness, long-context synthesis, and iterative exploration. The system needs search tools, document parsers, citation tracking, note memory, and mechanisms to distinguish evidence from speculation.
 
-## 2.3 Cyclic Garbage Collection
+Good design emphasizes:
 
-Reference counting alone cannot clean cycles.
+* source ingestion with metadata and provenance
+* retrieval over papers, webpages, notes, and user libraries
+* citation-aware answer generation
+* background workers for document processing
+* claims linked to retrieved evidence
+* feedback on source usefulness and answer correctness
+
+The interview framing is: "I would optimize for traceable synthesis, where every important claim can be mapped back to a source."
+
+## 2.5 Workflow Automation Agent
+
+A workflow automation agent coordinates multi-step business processes: update a CRM, send an email, schedule a meeting, open a ticket, reconcile records.
+
+The hard parts are durable state, retries, idempotency, authorization, and partial failure recovery. The agent cannot simply "think through" a workflow inside a single model call. It needs explicit state machines or durable workflow orchestration.
+
+Good design emphasizes:
+
+* workflow engine for long-running tasks
+* idempotent tool calls
+* checkpoints after each step
+* human approval for irreversible actions
+* event queues for asynchronous execution
+* compensation logic when downstream actions fail
+
+The interview framing is: "I would use the model for interpretation and decision support, but use durable workflow machinery for execution."
+
+## 2.6 Internal Knowledge Assistant
+
+An internal knowledge assistant answers employee questions using company docs, chats, tickets, and wikis.
+
+The hard parts are permissions, freshness, conflicting documents, and trust. Employees may ask about compensation, incidents, customer contracts, or unreleased strategy. The assistant must enforce document-level access and show provenance.
+
+Good design emphasizes:
+
+* permission-aware retrieval
+* freshness metadata and document ownership
+* conflict detection across sources
+* source citations in answers
+* feedback loops for doc owners
+* monitoring unanswered or low-confidence topics
+
+The interview framing is: "I would make access control part of retrieval itself, not a post-processing filter after the model has already seen restricted text."
+
+---
+
+# 3. System Design Primitives
+
+Top-layer system design is easier if you reduce it to primitives.
+
+## 3.1 Interfaces
+
+Interfaces define how users and other systems ask for work.
+
+Examples:
+
+* chat endpoint
+* code editor command
+* ticket triage webhook
+* scheduled workflow
+* internal API call
+
+The interface determines latency expectations. A chat response may need to stream within one second. A document ingestion job can take minutes. A refund approval workflow can wait for human review.
+
+## 3.2 Context
+
+Context is the information used to condition model behavior.
+
+Examples:
+
+* user request
+* conversation history
+* retrieved documents
+* account state
+* repository files
+* tool outputs
+* policy rules
+
+The core design problem is signal selection. Too little context produces hallucination. Too much context increases latency, cost, and distraction.
+
+## 3.3 Control Flow
+
+Control flow decides which steps run and in what order.
+
+Examples:
+
+* single prompt
+* retrieval then generation
+* planner then executor
+* tool loop with stopping conditions
+* durable workflow
+* human-in-the-loop approval
+
+Control flow should be explicit in the application layer. If all control flow lives inside the prompt, debugging and safety become much harder.
+
+## 3.4 State
+
+State is information preserved across steps or requests.
+
+Examples:
+
+* conversation state
+* workflow step state
+* user preferences
+* retrieved evidence
+* pending approvals
+* tool-call results
+* eval labels
+
+State needs ownership. Relational databases usually store durable business state. Caches store temporary speedups. Vector databases store searchable representations. Object stores hold large artifacts. Trace systems store execution history.
+
+## 3.5 Tools
+
+Tools let the system read data or take actions.
+
+Read tools are usually safer: search docs, fetch account status, inspect logs.
+
+Write tools are riskier: issue refund, deploy code, update CRM, send email.
+
+The design should classify tools by risk, permissions, rate limits, idempotency, and approval requirements. Tool descriptions alone are not a permission model.
+
+## 3.6 Evaluation
+
+Evaluation is how the system knows whether it is improving.
+
+Examples:
+
+* golden test sets
+* regression suites
+* online user feedback
+* human review labels
+* task completion metrics
+* trace audits
+* safety incident review
+
+Evals should connect to product outcomes. A support bot is not good because its responses sound polished. It is good if resolution time improves without increasing escalations, wrong answers, or policy violations.
+
+## 3.7 Reference-Guided Improvement
+
+Some system designs add a slower or more expensive reference process to improve the fast production path.
+
+Use this pattern when:
+
+* a verifier, search process, or human review path is too expensive for every request but produces high-quality guidance,
+* a policy needs to improve while staying near a safe baseline,
+* a specialized enterprise behavior is out of distribution for the base model,
+* a large teacher model can produce behavior that a smaller production model should learn,
+* a prompt or privileged context works but is too brittle or expensive to keep in every runtime request.
+
+The design checklist:
+
+* identify the fast object: student model, policy, router, or agent,
+* identify the reference object: teacher, old policy, target network, verifier, search process, or judge,
+* define the update signal: logits, reward, preference, mask, search target, or selected trajectory,
+* define refresh cadence: frozen, checkpoint promotion, EMA, or scheduled retraining,
+* gate with evals: target behavior, specificity, regression, safety, latency, and cost,
+* keep rollback and lineage: student version, reference version, data version, eval version.
+
+This turns a vague answer like "we will improve the model from feedback" into a concrete system design.
+
+## 3.8 Observability
+
+Observability is the ability to answer: what happened, why, and how often?
+
+For AI systems, logs are not enough. You need traces that connect:
+
+* user request
+* selected prompt version
+* retrieved documents
+* model and parameters
+* tool calls
+* validations
+* final answer
+* user or reviewer feedback
+
+Without this chain, silent regressions become normal.
+
+---
+
+# 4. Required Design Dimensions
+
+In interviews, a complete answer should cover the following dimensions.
+
+## 4.1 Architecture
+
+Architecture is the stable decomposition of responsibilities.
+
+A common high-level architecture:
+
+* client or product surface
+* API gateway
+* auth and permission service
+* orchestration service
+* retrieval service
+* model gateway
+* tool execution layer
+* workflow workers
+* relational database
+* vector database
+* cache
+* event queue
+* logging and tracing
+* evaluation pipeline
+* human review console
+
+The key is not naming every component. The key is explaining why each boundary exists.
+
+For example, separating a model gateway from the orchestrator lets you change model providers, apply routing, centralize rate limits, and log model usage consistently.
+
+## 4.2 Data Flow
+
+Data flow describes how information enters, moves through, and exits the system.
+
+A strong answer traces one request end to end:
+
+1. User submits request.
+2. API gateway authenticates and rate-limits.
+3. Orchestrator loads user, tenant, conversation, and policy state.
+4. Retrieval service fetches relevant context subject to permissions.
+5. Context builder compacts and ranks evidence.
+6. Model gateway calls selected model with versioned prompt.
+7. Tool calls are validated and executed if allowed.
+8. Final response is validated, streamed, and stored.
+9. Trace, feedback hooks, and eval events are emitted.
+
+This makes hidden assumptions visible.
+
+## 4.3 Memory and Retrieval
+
+Memory and retrieval decide what the system can know at runtime.
+
+Use different storage for different jobs:
+
+* relational database for users, workflows, permissions, and durable state
+* vector database for semantic search over documents and prior artifacts
+* object store for raw files, transcripts, PDFs, logs, and large payloads
+* cache for repeated retrieval results, prompts, feature flags, and hot metadata
+
+Retrieval should be permission-aware, freshness-aware, and observable. The system should log which documents were retrieved and which were actually used in the answer.
+
+## 4.4 Tool Orchestration
+
+Tool orchestration decides how the model interacts with external systems.
+
+For low-risk read tools, direct model-driven tool calls may be acceptable if schema validation and rate limits exist. For high-risk write tools, the application should require explicit authorization, approval, or deterministic business logic.
+
+A good design separates:
+
+* tool discovery: what tools exist
+* tool selection: which tool is relevant
+* tool authorization: whether this user and workflow may call it
+* tool execution: the actual side effect
+* tool observation: what result returns to the model
+
+The model may help choose a tool, but it should not be the only authority deciding whether the action is allowed.
+
+## 4.5 State Management
+
+State management determines whether multi-step behavior survives retries, restarts, and partial failures.
+
+Use request-local state for ephemeral context. Use durable state for workflows and actions. Use append-only event logs for audit-sensitive systems. Use caches only for values that can be recomputed.
+
+For long-running agents, a durable workflow engine is often better than a recursive prompt loop. The workflow engine can checkpoint progress, retry failed steps, time out stuck work, and expose state to operators.
+
+## 4.6 Eval Loop
+
+The eval loop converts traces and feedback into improvement.
+
+A practical loop:
+
+1. Log production traces with inputs, prompts, retrieved context, outputs, and outcomes.
+2. Sample failures and edge cases for human labeling.
+3. Convert labels into offline eval cases.
+4. Run evals before prompt, model, retrieval, or tool changes.
+5. Release changes behind flags.
+6. Monitor online metrics and rollback if regressions appear.
+
+This is how AI systems become engineering systems instead of demo systems.
+
+## 4.7 Safety and Permissions
+
+Safety and permissions are design constraints, not final filters.
+
+A strong design enforces permissions at multiple layers:
+
+* API layer authenticates the user and tenant
+* retrieval layer filters documents before model exposure
+* tool registry marks risk level and required scopes
+* policy engine approves or blocks actions
+* human review queue handles ambiguous or high-impact cases
+* audit log records sources, decisions, and side effects
+
+For action agents, make unsafe actions impossible by construction whenever possible.
+
+## 4.8 Rollout Strategy
+
+Rollout strategy controls blast radius.
+
+Common rollout mechanisms:
+
+* feature flags
+* tenant allowlists
+* shadow mode
+* canary release
+* A/B tests
+* staged model routing
+* prompt version pinning
+* kill switches
+
+For AI systems, rollout should include eval gates before launch and monitoring after launch. The system should also support rollback of prompts, models, retrieval configs, and tool policies independently.
+
+## 4.9 Monitoring and Debugging
+
+Monitoring asks whether the system is healthy. Debugging asks why it failed.
+
+Useful metrics include:
+
+* request volume
+* latency by stage
+* token usage
+* model cost
+* retrieval hit rate
+* tool error rate
+* validation failure rate
+* escalation rate
+* human override rate
+* task success rate
+* safety violation rate
+
+Useful debugging artifacts include:
+
+* full request traces
+* prompt versions
+* retrieved documents
+* model outputs before validation
+* tool-call payloads
+* policy decisions
+* user feedback
+* reviewer notes
+
+AI debugging is often comparative. You compare a bad trace with a good trace and identify where the divergence begins.
+
+## 4.10 Cost and Latency Management
+
+Cost and latency are product features.
+
+Common controls:
+
+* model routing by task difficulty
+* prompt compression
+* retrieval caching
+* parallel retrieval and metadata loading
+* smaller models for classification and routing
+* batch background jobs
+* streaming responses
+* token budgets per workflow
+* circuit breakers on tool loops
+* precomputed indexes and summaries
+
+The strongest design answers do not say "use a faster model." They break cost and latency into components and show which component dominates.
+
+---
+
+# 5. Common Technologies and Patterns
+
+The exact stack varies, but the patterns are stable.
+
+## 5.1 API Gateway
+
+An API gateway handles authentication, rate limiting, request size limits, routing, and coarse-grained tenant isolation.
+
+It protects expensive downstream systems from malformed or abusive requests. It is also a natural place to attach request IDs for trace correlation.
+
+## 5.2 Worker Orchestration
+
+Worker orchestration runs asynchronous or long-running work.
+
+Common choices:
+
+* Celery, Sidekiq, BullMQ, Temporal, Dagster, Airflow, Argo Workflows
+* Kubernetes jobs for isolated execution
+* serverless functions for bursty lightweight tasks
+
+Use workers for ingestion, indexing, batch evals, document parsing, workflow execution, and human-review processing.
+
+## 5.3 Vector DB + Relational DB + Cache
+
+A common storage trio:
+
+* vector DB for semantic retrieval
+* relational DB for durable structured state
+* cache for low-latency repeated reads
+
+Examples:
+
+* vector DB: Pinecone, Weaviate, Milvus, pgvector, Elasticsearch/OpenSearch vector search
+* relational DB: Postgres, MySQL
+* cache: Redis, Memcached
+
+The important design point is not the vendor. It is that semantic similarity, transactional state, and fast ephemeral lookup are different problems.
+
+## 5.4 Model Routing
+
+Model routing sends different tasks to different models.
+
+Examples:
+
+* small model for intent classification
+* fast model for simple answers
+* strong model for complex reasoning
+* embedding model for retrieval
+* reranker for evidence ordering
+* specialized model for code or vision
+
+Routing reduces cost and latency, but adds complexity. You need routing evals because a bad router silently sends hard tasks to weak models.
+
+## 5.5 Event Queues
+
+Event queues decouple producers from consumers.
+
+Common choices:
+
+* Kafka
+* SQS
+* Pub/Sub
+* RabbitMQ
+* Redis streams
+
+Queues are useful for ingestion, feedback processing, trace export, notifications, retries, and workflow steps. They also absorb traffic spikes and isolate failures.
+
+## 5.6 Logging and Tracing
+
+AI systems need structured logs and distributed traces.
+
+Trace spans should include:
+
+* request ID
+* user and tenant IDs where appropriate
+* prompt version
+* model version
+* retrieval query
+* retrieved document IDs
+* tool names and statuses
+* token counts
+* latency
+* validation results
+
+For privacy, traces should avoid unnecessary raw sensitive content or apply redaction and retention controls.
+
+## 5.7 Human Review Queues
+
+Human review queues convert uncertain automation into controlled automation.
+
+Use them when:
+
+* an action is high impact
+* confidence is low
+* policy is ambiguous
+* a new workflow is in shadow mode
+* users dispute outcomes
+
+Review data should not disappear. It becomes eval data, training data, policy feedback, and product insight.
+
+## 5.8 Feature Flags
+
+Feature flags let you release behavior gradually.
+
+AI systems should flag:
+
+* prompt versions
+* retrieval configurations
+* model routes
+* tool availability
+* autonomy level
+* safety policies
+* UI affordances
+
+Flags are especially important because AI regressions can be qualitative and delayed.
+
+## 5.9 Prompt and Version Management
+
+Prompts are production artifacts.
+
+Treat them like versioned code:
+
+* stable identifiers
+* change history
+* owners
+* eval gates
+* rollout status
+* rollback support
+* compatibility with tool schemas and output schemas
+
+Unversioned prompts make debugging nearly impossible because you cannot reconstruct what the model saw.
+
+---
+
+# 6. Request Lifecycle
+
+A concrete request lifecycle reveals whether the system is actually designed.
+
+Consider an internal knowledge assistant answering: "Can I share this customer roadmap slide with Vendor X?"
+
+## 6.1 Ingress
+
+The client sends the request to the API gateway.
+
+The gateway:
+
+* authenticates the user
+* attaches tenant and role metadata
+* enforces rate limits
+* rejects oversized payloads
+* creates a request ID
+
+The request then enters the orchestrator.
+
+## 6.2 Request Classification
+
+The orchestrator classifies the request.
+
+Possible labels:
+
+* knowledge question
+* policy question
+* action request
+* sensitive-data request
+* unsupported request
+
+This classification determines retrieval sources, safety checks, model route, and whether human review may be required.
+
+## 6.3 State Loading
+
+The orchestrator loads:
+
+* user profile
+* tenant settings
+* conversation history
+* feature flags
+* relevant permissions
+* active prompt and policy versions
+
+This state is structured. It should not be reconstructed from free-form chat history if it affects permissions or actions.
+
+## 6.4 Retrieval
+
+The retrieval service searches:
+
+* customer-sharing policy docs
+* security policy docs
+* contract metadata
+* customer account permissions
+* prior approved examples
+
+Retrieval filters documents by the user's access rights before returning them.
+
+## 6.5 Context Assembly
+
+The context builder ranks and compresses evidence.
+
+It constructs:
+
+* system instruction
+* task instruction
+* user request
+* relevant policy snippets
+* metadata about document freshness
+* required citation format
+* safety constraints
+* output schema
+
+This is where many systems fail. Context assembly is an engineering component, not a string concatenation afterthought.
+
+## 6.6 Model Call
+
+The model gateway selects a model based on task risk and complexity.
+
+It records:
+
+* model name
+* prompt version
+* temperature
+* token counts
+* latency
+* cost estimate
+
+For policy-sensitive work, the model may be asked to produce structured reasoning fields such as answer, supporting sources, uncertainty, and escalation recommendation.
+
+## 6.7 Validation and Action Gating
+
+The system validates the output.
+
+Checks may include:
+
+* required citations exist
+* cited docs were actually retrieved
+* answer follows schema
+* sensitive action is not being performed directly
+* uncertainty threshold is acceptable
+* policy category permits direct answer
+
+If validation fails, the system may retry with a repair prompt, fall back to a safer answer, or escalate.
+
+## 6.8 Response and Persistence
+
+The final answer is streamed or returned to the user.
+
+The system stores:
+
+* request and response metadata
+* prompt and model versions
+* retrieval document IDs
+* validation status
+* user feedback hook
+* trace pointer
+
+Sensitive raw content may require retention limits or redaction.
+
+## 6.9 Feedback and Evaluation
+
+The user may mark the answer helpful, unhelpful, or unsafe. A reviewer may later label whether the answer was policy-correct.
+
+Those labels flow into:
+
+* dashboards
+* regression tests
+* retrieval quality analysis
+* prompt iteration
+* policy doc improvement
+* model routing changes
+
+The request lifecycle is not complete until production behavior becomes measurable.
+
+---
+
+# 7. Context Building
+
+Context building is the highest-leverage part of many AI products.
+
+A context builder chooses what the model sees. It usually combines:
+
+* instruction context
+* user context
+* conversation context
+* retrieved context
+* tool context
+* policy context
+* output constraints
+
+## 7.1 Retrieval Is Not Enough
+
+Retrieval returns candidates. Context building decides what becomes evidence.
+
+A strong context builder:
+
+* filters by permissions
+* ranks by relevance
+* considers freshness
+* removes duplicates
+* compresses long documents
+* preserves citations
+* separates facts from instructions
+* fits within token budget
+
+Bad context building creates retrieval poisoning. A stale document, malicious page, or irrelevant prior ticket can steer the model more than the actual user request.
+
+## 7.2 Context Budgets
+
+Every workflow should have a context budget.
+
+Example budget:
+
+* 500 tokens for system and policy instructions
+* 500 tokens for conversation summary
+* 2,000 tokens for retrieved evidence
+* 500 tokens for tool observations
+* 500 tokens reserved for output
+
+Budgets force product decisions. If the system needs more evidence than fits, it may need summarization, reranking, multi-step reading, or a different UX.
+
+## 7.3 Context as an Artifact
+
+For debugging, store the assembled prompt or a redacted representation of it.
+
+You should be able to answer:
+
+* What did the model see?
+* Which documents were excluded?
+* Which permissions applied?
+* Which prompt version was used?
+* Which compression strategy ran?
+
+If you cannot reconstruct context, you cannot explain behavior.
+
+---
+
+# 8. Tool Orchestration and State
+
+Tool orchestration is where AI systems become operational systems.
+
+## 8.1 Tool Risk Levels
+
+Classify tools by risk.
+
+Low risk:
+
+* search docs
+* fetch read-only account metadata
+* run local static analysis
+* calculate price estimate
+
+Medium risk:
+
+* draft email
+* create ticket
+* update non-critical metadata
+* schedule meeting
+
+High risk:
+
+* send external email
+* issue refund
+* change permissions
+* deploy code
+* delete data
+
+Each level should have different authorization, validation, and review requirements.
+
+## 8.2 Deterministic Guards Around Probabilistic Choices
+
+The model can propose an action. Deterministic code should check whether the action is valid.
 
 Example:
 
-```text
-object A -> object B
-object B -> object A
-```
+The model proposes `refund_customer(order_id=123, amount=500)`.
 
-If nothing else points to A or B, their reference counts are still nonzero because they point to each other.
+The policy engine checks:
 
-CPython has a cyclic garbage collector that periodically finds groups of unreachable objects and frees them.
+* user has refund scope
+* order belongs to tenant
+* amount is below threshold
+* customer is eligible
+* no duplicate refund exists
+* workflow has required approval
 
-This matters when objects contain:
+Only then does the tool execute.
 
-* parent pointers,
-* graph structures,
-* closures,
-* callbacks,
-* exception tracebacks,
-* async tasks,
-* objects with `__del__` finalizers.
+## 8.3 Durable Agent State
 
-Cycles are not automatically bad, but they make lifetime less obvious.
+For multi-step work, state should not live only in the model context.
 
-Interview framing:
+Durable state includes:
 
-> Python mainly uses reference counting, with cyclic GC for unreachable reference cycles. In production, leaks usually mean objects are still reachable through caches, globals, callbacks, tasks, or traces, not that Python forgot how to free memory.
+* workflow ID
+* current step
+* completed steps
+* pending approvals
+* retry count
+* tool-call outputs
+* compensation actions
+* final status
 
-## 2.4 Python Allocators and RSS
+This lets the system resume after crashes, inspect stuck workflows, and avoid repeating side effects.
 
-A common production confusion:
+## 8.4 Idempotency
 
-> "I deleted the object. Why did process memory not go down?"
+Tool calls that mutate external systems should be idempotent.
 
-The answer is that freeing Python objects does not always return memory to the operating system immediately.
+An idempotency key prevents retries from sending the same email twice, issuing the same refund twice, or creating duplicate tickets.
 
-CPython uses memory allocators that manage arenas and pools for small objects. Freed memory may stay available for future Python allocations inside the process. Your heap may be healthier even if RSS does not drop.
+Without idempotency, retries turn reliability mechanisms into new failure modes.
 
-Important terms:
+---
 
-* **live objects:** objects still reachable and usable,
-* **heap growth:** memory Python has allocated for objects,
-* **RSS:** resident memory reported by the operating system,
-* **fragmentation:** memory is free internally but not easily returned or reused in the pattern you need.
+# 9. Failure Containment
 
-When debugging memory, do not rely on one number.
+AI systems fail in ways that look plausible.
 
-Use:
+Containment means one bad component does not corrupt the whole system.
 
-* RSS for process-level pressure,
-* object counts by type,
-* heap snapshots,
-* allocation traces,
-* cache sizes,
-* request-level memory growth,
-* worker restart frequency.
+## 9.1 Bound Each Loop
 
-## 2.5 Production Memory Leak Patterns
+Agent loops need:
 
-Common leak patterns in AI backends:
+* maximum iterations
+* maximum tool calls
+* maximum token budget
+* maximum wall-clock time
+* stopping conditions
+* escalation path
 
-### Unbounded Caches
+Unbounded loops create latency spikes, cost blowups, and duplicated actions.
 
-```text
-cache[prompt] = response
-```
+## 9.2 Isolate Tools
 
-This looks harmless until prompts are unique and the cache grows forever.
+Tool failures should return structured errors.
 
-Fixes:
+The model should not see raw stack traces, secrets, or confusing partial payloads. The orchestrator should decide whether to retry, use fallback data, or escalate.
 
-* max size,
-* TTL,
-* tenant-aware keys,
-* explicit invalidation,
-* cache hit-rate monitoring.
+## 9.3 Use Circuit Breakers
 
-### Trace and Logging Retention
-
-AI traces can be huge. If a service stores full prompts, retrieved chunks, tool outputs, and responses in memory before flushing, memory can spike or leak.
-
-Fixes:
-
-* stream traces out of process,
-* redact and truncate large fields,
-* sample high-volume traces,
-* avoid storing full payloads in exception objects.
-
-### Callback and Task Leaks
-
-Async systems often leak through pending tasks, callbacks, or futures that are never awaited or cancelled.
-
-Fixes:
-
-* timeouts,
-* cancellation,
-* task groups,
-* cleanup handlers,
-* monitoring for pending task counts.
-
-### Global Registries
-
-Registries for tools, prompts, metrics, or plugins can accidentally retain per-request objects.
-
-Fixes:
-
-* store configuration, not request state,
-* avoid lambdas that close over large objects,
-* clear per-request context after use.
-
-### Native Extension Leaks
-
-ML libraries often use native memory outside normal Python object accounting.
+Circuit breakers protect shared dependencies.
 
 Examples:
 
-* NumPy arrays,
-* PyTorch tensors,
-* tokenizers,
-* image libraries,
-* GPU memory allocations.
+* disable a flaky tool after error rate spikes
+* fall back to cached retrieval during vector DB degradation
+* route to a cheaper model when budget is exceeded
+* stop autonomous writes during safety incidents
 
-Fixes:
+Circuit breakers should be visible to operators and reflected in user-facing behavior.
 
-* monitor process RSS and GPU memory,
-* release tensors and references,
-* use inference mode where appropriate,
-* isolate risky workloads in restartable workers.
+## 9.4 Separate Drafting From Execution
 
-## 2.6 Memory Debugging Checklist
+When risk is high, let the model draft and let deterministic systems or humans execute.
 
-When memory grows in production:
+This is the difference between:
 
-1. Identify whether growth is per request, per batch, per tenant, or over wall-clock time.
-2. Compare RSS, heap snapshots, object counts, cache sizes, and native memory.
-3. Reproduce with a representative workload.
-4. Check unbounded dictionaries, lists, LRU caches, task registries, and trace buffers.
-5. Look for large objects retained by closures, exceptions, callbacks, and globals.
-6. Confirm whether memory stabilizes after load stops.
-7. Add bounds, cleanup, streaming, or worker recycling.
+* "Here is a suggested refund response for review"
+* "The assistant refunded $5,000"
 
-Good interview answer:
-
-> I would not say "Python has GC, so it cannot leak." Python leaks when objects remain reachable. I would profile object growth, inspect caches and references, check native memory, and add bounds or lifecycle cleanup.
+The first can be safely iterated. The second requires strong controls.
 
 ---
 
-# 3. Concurrency in Python
+# 10. Feedback, Evaluation, and Evolution
 
-Concurrency is about dealing with multiple things in progress.
+Production AI systems evolve through feedback loops.
 
-Parallelism is about executing multiple things at the same time.
+## 10.1 Feedback Storage
 
-They are related but not identical.
+Store feedback with enough context to be useful.
 
-AI systems need both:
+Useful fields:
 
-* concurrent API requests,
-* concurrent retrieval calls,
-* concurrent tool calls,
-* parallel CPU preprocessing,
-* parallel GPU inference,
-* background workers,
-* streaming responses,
-* cancellation and timeouts.
+* request ID
+* user segment
+* prompt version
+* model version
+* retrieved document IDs
+* answer
+* user rating
+* reviewer label
+* failure category
+* free-text notes
+* downstream outcome
 
-## 3.1 The Three Main Tools
+Feedback without trace linkage becomes anecdotal.
 
-In Python, the main concurrency tools are:
+## 10.2 Offline Evals
 
-| Tool | Best for | Main tradeoff |
-| ---- | -------- | ------------- |
-| Threads | IO-bound blocking libraries | Limited CPU parallelism under the GIL |
-| Multiprocessing | CPU-bound Python work | More memory and serialization overhead |
-| Asyncio | High-concurrency IO with non-blocking libraries | Requires async-compatible code |
+Offline evals catch regressions before rollout.
 
-The right question is not "which is best?"
+Build eval sets from:
 
-The right question is:
+* production failures
+* high-volume tasks
+* safety-critical examples
+* edge cases
+* adversarial inputs
+* reviewer-labeled traces
 
-> What is the bottleneck?
+Evals should measure the behavior you care about. For a knowledge assistant, faithfulness and citation accuracy matter. For a workflow agent, task completion and side-effect correctness matter. For a coding assistant, build/test success and edit minimality matter.
 
-## 3.2 The GIL
+## 10.3 Online Monitoring
 
-The Global Interpreter Lock is a CPython mutex that allows only one thread to execute Python bytecode at a time within a process.
-
-Why it exists:
-
-* it simplifies CPython internals,
-* it protects reference counting,
-* it makes many object operations simpler.
-
-What it means:
-
-* CPU-bound Python threads do not run Python bytecode in parallel,
-* IO-bound threads can still overlap while waiting,
-* native extensions can release the GIL,
-* multiprocessing can use multiple CPU cores,
-* async can handle many IO waits in one thread.
-
-The GIL does not mean Python can only do one thing at a time. It means pure Python CPU work does not parallelize across threads in a single CPython process.
-
-Interview framing:
-
-> The GIL mostly hurts CPU-bound Python threading. It matters less for IO-bound services, and it can be bypassed with multiprocessing, native extensions, vectorized libraries, or separate services.
-
-## 3.3 Threading
-
-Threads are useful when code blocks on IO:
-
-* database calls,
-* HTTP requests,
-* file reads,
-* model API calls through blocking clients.
-
-Threads let one request wait while another makes progress.
-
-But threads have costs:
-
-* context switching,
-* shared-memory bugs,
-* locks,
-* harder debugging,
-* no pure-Python CPU parallelism under the GIL.
-
-Use threads when:
-
-* your libraries are blocking,
-* the work is IO-bound,
-* concurrency is moderate,
-* you need a simple integration.
-
-Avoid threads as the primary solution for:
-
-* CPU-heavy feature transforms,
-* large JSON parsing at high volume,
-* embedding postprocessing in pure Python,
-* workloads requiring strict cancellation semantics.
-
-## 3.4 Multiprocessing
-
-Multiprocessing runs separate Python processes.
-
-Each process has its own interpreter and its own GIL. That means CPU-bound Python work can run in parallel across cores.
-
-Useful for:
-
-* CPU-heavy preprocessing,
-* batch feature transforms,
-* image processing,
-* parsing large files,
-* isolation of risky or leaky work.
-
-Tradeoffs:
-
-* higher memory use,
-* process startup cost,
-* serialization and IPC overhead,
-* harder shared state,
-* deployment complexity.
-
-In AI systems, multiprocessing is often used for worker pools and background jobs rather than request-path orchestration.
-
-## 3.5 Asyncio
-
-Asyncio uses an event loop.
-
-Coroutines voluntarily yield control when they hit an `await`.
-
-```text
-request A starts DB call -> awaits
-request B starts model call -> awaits
-request C validates input -> completes
-DB result returns -> request A resumes
-```
-
-Async is excellent for orchestration services that wait on many network calls:
-
-* model APIs,
-* vector databases,
-* SQL databases with async drivers,
-* object stores,
-* tool services,
-* streaming clients.
-
-Async fails when you block the event loop:
-
-* synchronous HTTP call,
-* synchronous database driver,
-* CPU-heavy parsing,
-* large JSON serialization,
-* `time.sleep`,
-* long loop without `await`.
-
-If one coroutine blocks the event loop, all other coroutines wait.
-
-Interview framing:
-
-> Async improves concurrency for IO-bound work. It does not make CPU-bound work faster. In an async service, every dependency on the hot path must be non-blocking or moved to a worker.
-
-## 3.6 Backpressure
-
-Backpressure means the system refuses or slows new work when downstream capacity is saturated.
-
-Without backpressure:
-
-```text
-traffic spike -> queue grows -> latency rises -> clients retry -> traffic grows more
-```
-
-Backpressure tools:
-
-* bounded queues,
-* semaphores,
-* admission control,
-* rate limits,
-* per-tenant quotas,
-* load shedding,
-* circuit breakers,
-* deadlines and cancellation.
-
-AI systems need backpressure because model calls are expensive and slow compared with normal web requests.
-
-If work cannot be served within its deadline, it is often better to reject early than to let it sit in a queue and fail late.
-
-## 3.7 Cancellation and Timeouts
-
-Every external call should have a timeout:
-
-* retrieval,
-* database query,
-* model call,
-* tool call,
-* object-store read,
-* streaming write.
-
-Cancellation matters because users leave, clients disconnect, and upstream deadlines expire.
-
-If cancellation does not propagate, the system keeps doing useless work:
-
-```text
-user disconnects
-  -> API task continues
-  -> model call continues
-  -> worker produces response nobody receives
-  -> cost is still paid
-```
-
-Good systems propagate deadlines through the request path.
-
----
-
-# 4. Python Abstractions That Matter
-
-Python lets you build powerful abstractions quickly. That is useful in AI systems, where teams often need rapid iteration over prompts, tools, models, schemas, and workflows.
-
-But dynamic abstractions can hide control flow and make production failures harder to debug.
-
-## 4.1 Decorators
-
-A decorator is a callable that takes a function or class and returns a replacement.
-
-```text
-@decorator
-def f():
-    ...
-
-# roughly means:
-f = decorator(f)
-```
-
-Common production uses:
-
-* tracing,
-* retries,
-* auth checks,
-* caching,
-* timing,
-* rate limiting,
-* tool registration,
-* schema validation.
-
-Example mental model:
-
-```text
-function call
-  -> wrapper
-  -> pre-work
-  -> original function
-  -> post-work
-  -> return
-```
-
-Decorators are useful when the behavior is cross-cutting and consistent.
-
-They are dangerous when they hide:
-
-* network calls,
-* retries with side effects,
-* swallowed exceptions,
-* global state mutation,
-* performance overhead.
-
-Production rule:
-
-> A decorator should make behavior easier to see at the call site or in traces, not harder.
-
-## 4.2 Metaclasses
-
-Metaclasses control class creation.
-
-Most engineers rarely need them.
-
-They can be useful for:
-
-* frameworks,
-* ORMs,
-* plugin systems,
-* schema registration,
-* validation at class definition time.
-
-But they are often overkill. Many use cases can be solved with:
-
-* class decorators,
-* base classes,
-* registries,
-* dataclasses,
-* explicit factory functions.
-
-Interview framing:
-
-> A metaclass is the class of a class. It customizes how classes are created. I know what it is, but I would avoid it unless I am building framework-level behavior where class construction itself needs control.
-
-## 4.3 Dynamic Typing and Runtime Validation
-
-Python is dynamically typed. That helps speed, iteration, and expressiveness.
-
-But AI systems often need strict boundaries:
-
-* model output schemas,
-* tool arguments,
-* API payloads,
-* database records,
-* event schemas,
-* feature rows.
-
-The safest pattern is:
-
-```text
-dynamic inside the implementation
-strict at boundaries
-```
-
-Useful tools:
-
-* type hints,
-* dataclasses,
-* Pydantic models,
-* JSON Schema,
-* database constraints,
-* runtime validators,
-* static type checking where practical.
-
-This matters because LLM outputs are probabilistic. The system should validate before trusting them.
-
-## 4.4 Idempotency as a Software Abstraction
-
-Idempotency means repeating an operation has the same effect as doing it once.
-
-This is essential for:
-
-* retries,
-* queues,
-* distributed workers,
-* agent tool calls,
-* payment or email actions,
-* data pipeline writes.
-
-A common pattern:
-
-```text
-idempotency_key = stable key for the intended action
-
-if action already completed:
-    return stored result
-else:
-    perform action
-    store result
-```
-
-In AI systems, the model may request the same tool twice, a worker may retry after timeout, or a client may resubmit a request. Idempotency prevents duplicate side effects.
-
----
-
-# 5. Profiling and Debugging Python Services
-
-Performance work starts with measurement.
-
-Guessing is expensive because AI systems have many possible bottlenecks:
-
-* Python CPU,
-* model latency,
-* database latency,
-* retrieval latency,
-* queue wait,
-* network time,
-* serialization,
-* logging,
-* tokenization,
-* GPU memory,
-* downstream tools.
-
-## 5.1 CPU Profiling
-
-Use CPU profiling when the process is actively computing.
-
-Tools and approaches:
-
-* `cProfile` for deterministic profiling,
-* sampling profilers such as py-spy,
-* flame graphs,
-* targeted timers around expensive functions,
-* benchmark scripts with realistic inputs.
-
-Common CPU hotspots in AI systems:
-
-* tokenization,
-* JSON parsing,
-* prompt formatting,
-* embedding postprocessing,
-* reranking,
-* data validation,
-* compression,
-* encryption,
-* pandas transformations,
-* large object serialization.
-
-Do not optimize code that is not on the hot path.
-
-## 5.2 Memory Profiling
-
-Use memory profiling when RSS grows, workers OOM, or latency degrades after running for a while.
-
-Look at:
-
-* object counts by type,
-* allocation stack traces,
-* cache sizes,
-* large strings and lists,
-* pending tasks,
-* exception tracebacks,
-* tensor and native memory,
-* per-request memory deltas.
-
-Tools and techniques:
-
-* `tracemalloc`,
-* heap snapshots,
-* object graph inspection,
-* process RSS metrics,
-* GPU memory metrics,
-* controlled load tests.
-
-## 5.3 Latency Profiling
-
-A production request trace should break latency into stages:
-
-```text
-ingress
-  -> auth
-  -> validation
-  -> queue wait
-  -> database
-  -> retrieval
-  -> model prefill / API wait
-  -> decode / streaming
-  -> postprocessing
-  -> response write
-```
-
-For LLM backends, track at least:
-
-* time to first token,
-* time to final token,
-* prompt tokens,
-* output tokens,
-* queue wait,
-* model route,
-* model version,
-* prompt version,
-* cache hit/miss,
-* retrieval time,
-* database time,
-* retry count.
-
-Latency without dimensions is hard to debug.
-
-## 5.4 Microbenchmarks vs Production Profiles
-
-Microbenchmarks answer:
-
-> How fast is this function in isolation?
-
-Production profiles answer:
-
-> Where does real user time go?
-
-Both matter.
-
-Microbenchmarks can miss:
-
-* network variance,
-* queueing,
-* locks,
-* GC behavior,
-* cold starts,
-* large payloads,
-* noisy neighbors,
-* retries,
-* batching effects.
-
-Use microbenchmarks for local code choices. Use traces for system choices.
-
-## 5.5 Debugging Playbook
-
-When a Python AI service is slow:
-
-1. Check whether latency increased for all traffic or only a slice.
-2. Split latency by stage.
-3. Check request sizes: prompt tokens, retrieved chunks, output tokens, payload bytes.
-4. Check queue wait and concurrency.
-5. Check database and retrieval timings.
-6. Check CPU and memory.
-7. Check retries and fallbacks.
-8. Compare prompt/model/config versions.
-9. Reproduce with a trace from production.
-
-When a Python AI service leaks memory:
-
-1. Confirm whether RSS grows without bound.
-2. Compare live object growth and native memory growth.
-3. Look for unbounded caches and registries.
-4. Inspect pending tasks and futures.
-5. Check trace/log buffers.
-6. Check large objects retained by exceptions.
-7. Add bounds, cleanup, streaming, or worker recycling.
-
----
-
-# 6. SQL and Relational Systems
-
-AI systems still depend heavily on relational databases.
-
-They store:
-
-* users,
-* tenants,
-* permissions,
-* documents,
-* metadata,
-* tool state,
-* traces,
-* feedback,
-* eval results,
-* feature definitions,
-* workflow state.
-
-If the database layer is slow or inconsistent, the AI system will look slow or inconsistent.
-
-## 6.1 Query Plans
-
-To optimize SQL, start with the query plan.
-
-The plan tells you how the database intends to execute the query:
-
-* sequential scan,
-* index scan,
-* nested loop join,
-* hash join,
-* sort,
-* aggregate,
-* filter,
-* partition pruning.
-
-Bad signs:
-
-* scanning far more rows than expected,
-* joining large tables before filtering,
-* sorting huge intermediate results,
-* using the wrong index,
-* inaccurate row estimates,
-* repeated nested loops over large tables.
-
-Strong interview framing:
-
-> I would inspect the query plan first, identify whether the bottleneck is scan, join, sort, aggregation, or cardinality estimation, then change indexes, query shape, partitioning, or materialization based on the plan.
-
-## 6.2 Indexes
-
-An index speeds up lookup by maintaining a separate data structure.
-
-Good for:
-
-* exact lookups,
-* range filters,
-* joins,
-* sorting,
-* uniqueness constraints.
-
-Costs:
-
-* extra storage,
-* slower writes,
-* maintenance overhead,
-* planner complexity.
-
-Index design should follow access patterns.
-
-Examples:
-
-```text
-tenant_id + document_id
-tenant_id + created_at
-user_id + status
-workflow_id + step_status
-source_id + chunk_id
-```
-
-For multi-tenant AI systems, forgetting tenant in an index can make queries slow and make access control harder to reason about.
-
-## 6.3 Partitioning
-
-Partitioning splits a table into physical pieces.
-
-Common partition keys:
-
-* time,
-* tenant,
-* region,
-* hash,
-* product area.
-
-Partitioning helps when queries can prune partitions.
-
-Example:
-
-```text
-WHERE event_date >= '2026-05-01'
-```
-
-If the table is partitioned by date, the database can skip older partitions.
-
-Bad partition keys create:
-
-* hot partitions,
-* too many tiny partitions,
-* cross-partition queries,
-* operational complexity.
-
-## 6.4 Materialized Views
-
-A materialized view stores query results.
-
-Useful when:
-
-* the query is expensive,
-* reads are frequent,
-* staleness is acceptable,
-* refresh rules are clear.
-
-Examples:
-
-* daily feature aggregates,
-* dashboard metrics,
-* eval summary tables,
-* tenant usage reports,
-* retrieval quality reports.
-
-Tradeoffs:
-
-* stale data,
-* refresh cost,
-* storage cost,
-* invalidation complexity.
-
-Materialized views are not magic. They move work from read time to refresh time.
-
-## 6.5 Transactions and Deadlocks
-
-Transactions group operations so they succeed or fail together.
-
-Deadlocks happen when transactions wait on each other:
-
-```text
-transaction A locks row 1, waits for row 2
-transaction B locks row 2, waits for row 1
-```
-
-Prevention:
-
-* consistent lock ordering,
-* short transactions,
-* narrow updates,
-* good indexes,
-* retry on deadlock,
-* avoid user or model calls inside transactions.
-
-AI-specific warning:
-
-Do not hold a database transaction open while waiting for a model call or external tool. Model calls are slow and unreliable compared with database operations.
-
-## 6.6 OLTP vs OLAP
-
-OLTP systems serve transactions:
-
-* user updates,
-* workflow state,
-* permissions,
-* tool execution records,
-* request metadata.
-
-They optimize for low-latency reads/writes and consistency.
-
-OLAP systems serve analytics:
-
-* dashboards,
-* aggregates,
-* model training datasets,
-* eval analysis,
-* usage reporting.
-
-They optimize for scanning and aggregating large data.
-
-Mixing OLAP queries into OLTP databases can hurt user-facing latency.
-
-Common pattern:
-
-```text
-OLTP database
-  -> CDC or batch export
-  -> warehouse / lake
-  -> analytics / training / evals
-```
-
----
-
-# 7. Distributed Data Fundamentals
-
-At scale, one database or one data store may not be enough.
-
-Distributed data systems add capacity, but they also add failure modes.
-
-## 7.1 Sharding
-
-Sharding splits data across multiple database instances.
-
-Example:
-
-```text
-tenant_id % number_of_shards -> shard
-```
-
-Benefits:
-
-* more storage,
-* more write capacity,
-* tenant isolation,
-* regional placement.
-
-Costs:
-
-* cross-shard queries,
-* rebalancing,
-* hot shards,
-* operational complexity,
-* harder transactions.
-
-Good shard keys:
-
-* distribute load,
-* match common queries,
-* minimize cross-shard operations,
-* avoid one huge tenant dominating a shard.
-
-## 7.2 Hot Shards
-
-A hot shard receives too much traffic.
-
-Causes:
-
-* one large tenant,
-* time-based writes all hitting the newest partition,
-* celebrity users,
-* skewed routing,
-* batch jobs targeting one key range.
-
-Mitigations:
-
-* split large tenants,
-* add sub-sharding,
-* spread writes,
-* rate limit hot keys,
-* route heavy analytics away from OLTP.
-
-## 7.3 CAP Theorem in Practice
-
-CAP says that when a network partition happens, a distributed system must choose between consistency and availability.
-
-Practical translation:
-
-* If the network is healthy, many systems provide both enough consistency and enough availability.
-* During partition, you must decide whether to reject requests or risk stale/conflicting data.
-
-AI product examples:
-
-* Permission checks should usually prefer consistency over availability.
-* Usage analytics may prefer availability with eventual consistency.
-* Feature freshness may tolerate slight staleness.
-* Payment or account actions need stronger consistency.
-* Caches may serve stale data only when the product can tolerate it.
-
-The interview point:
-
-> CAP is not a slogan. It is a prompt to define behavior under failure for each subsystem.
-
-## 7.4 Star Schema vs Snowflake Schema
-
-Analytics schemas often separate facts and dimensions.
-
-Fact table:
-
-* events,
-* requests,
-* tool calls,
-* model invocations,
-* purchases,
-* labels.
-
-Dimension tables:
-
-* users,
-* tenants,
-* models,
-* prompts,
-* documents,
-* products.
-
-Star schema:
-
-```text
-dimension tables -> fact table <- dimension tables
-```
-
-Dimensions are denormalized and directly connected to the fact table.
-
-Snowflake schema normalizes dimensions into more tables.
-
-Tradeoff:
-
-* star schema is simpler and often faster for analytics,
-* snowflake schema reduces duplication but adds joins.
-
-For ML analytics, simplicity often wins unless dimension consistency is a major problem.
-
----
-
-# 8. Data Pipelines for ML Systems
-
-Models are shaped by data.
-
-If the data pipeline breaks, the model can fail even when the model code is unchanged.
-
-## 8.1 Pipeline Layers
-
-A practical ML data pipeline often has layers:
-
-```text
-raw events
-  -> validation
-  -> cleaned data
-  -> features
-  -> training datasets
-  -> model artifacts
-  -> serving features
-  -> monitoring and feedback
-```
-
-Each layer should have:
-
-* ownership,
-* schema,
-* freshness expectation,
-* quality checks,
-* lineage,
-* retention policy.
-
-## 8.2 Batch Pipelines
-
-Batch pipelines process data on a schedule:
-
-* hourly,
-* daily,
-* weekly,
-* per training run.
-
-Good for:
-
-* large historical aggregations,
-* training datasets,
-* offline evals,
-* backfills,
-* reports.
-
-Risks:
-
-* stale data,
-* long recovery time,
-* expensive recomputation,
-* hidden failures until the next run.
-
-## 8.3 Streaming Pipelines
-
-Streaming pipelines process events continuously.
-
-Good for:
-
-* near-real-time features,
-* alerts,
-* usage monitoring,
-* drift detection,
-* personalization,
-* online feedback.
-
-Hard parts:
-
-* ordering,
-* retries,
-* duplicate events,
-* late events,
-* schema evolution,
-* backpressure,
-* exactly-once vs at-least-once semantics.
-
-Most systems are effectively at-least-once and rely on idempotent sinks.
-
-## 8.4 Schema Contracts
-
-Schema changes break AI systems quietly.
-
-Examples:
-
-* `user_id` changes from integer to string,
-* `timestamp` changes timezone,
-* an enum gains a new value,
-* a nullable field becomes missing,
-* a model output field changes name,
-* a document metadata field disappears.
-
-Schema contracts should define:
-
-* field names,
-* types,
-* nullability,
-* allowed values,
-* version,
-* owner,
-* compatibility rules.
-
-Validate data at ingestion and before serving.
-
-## 8.5 Backfills
-
-Backfills recompute historical data.
-
-They are needed when:
-
-* feature logic changes,
-* data was missing,
-* a bug is fixed,
-* a new model needs historical examples,
-* a new metric is introduced.
-
-Backfill risks:
-
-* overwhelming databases,
-* inconsistent historical definitions,
-* duplicate writes,
-* changing training data without versioning,
-* mixing old and new feature logic.
-
-Use versioned datasets and idempotent writes.
-
-## 8.6 Training-Serving Skew
-
-Training-serving skew happens when the features used in training differ from features used in production.
-
-Causes:
-
-* different code paths,
-* different freshness,
-* missing real-time data,
-* inconsistent defaults,
-* time leakage in training,
-* schema drift,
-* online transformations not matching offline transformations.
-
-Mitigations:
-
-* shared feature definitions,
-* feature stores,
-* point-in-time correct joins,
-* online/offline parity tests,
-* monitoring feature distributions.
-
-## 8.7 Data Quality Checks
-
-Data quality checks catch failures before they become model failures.
-
-Common checks:
-
-* row count,
-* null rate,
-* uniqueness,
-* value ranges,
-* enum values,
-* freshness,
-* distribution drift,
-* referential integrity,
-* duplicate events,
-* label availability.
-
-For AI systems, also check:
-
-* prompt version,
-* retrieved document source,
-* embedding model version,
-* model output schema,
-* tool result schema,
-* citation support.
-
----
-
-# 9. Scalable Python Backends for AI Inference
-
-A scalable Python AI backend separates user-facing orchestration from expensive inference work.
-
-## 9.1 Basic Architecture
-
-```text
-client
-  -> API gateway
-  -> Python orchestration service
-  -> cache / database / retrieval
-  -> queue or batcher
-  -> inference worker / model gateway
-  -> validation
-  -> streaming response
-  -> traces and metrics
-```
-
-The API layer should own:
-
-* auth,
-* input validation,
-* quotas,
-* request IDs,
-* routing decisions,
-* deadlines,
-* streaming connection,
-* user-visible errors.
-
-Workers should own:
-
-* model calls,
-* batching,
-* retries to model providers where safe,
-* GPU/runtime management,
-* expensive preprocessing,
-* output validation,
-* worker-level metrics.
-
-Do not make one service own everything forever.
-
-## 9.2 Request Validation
-
-Validate early:
-
-* input size,
-* content type,
-* tenant/user identity,
-* allowed model route,
-* max tokens,
-* tool permissions,
-* schema shape.
-
-Early validation protects downstream systems from bad or abusive requests.
-
-## 9.3 Model Routing
-
-Model routing decides which model or provider handles a request.
-
-Signals:
-
-* task type,
-* user tier,
-* latency target,
-* cost budget,
-* risk level,
-* input length,
-* language,
-* required tools,
-* retrieval quality.
-
-Routing failure mode:
-
-* easy tasks go to expensive models,
-* hard tasks go to weak models,
-* fallback model silently reduces quality,
-* provider outage routes all traffic to an underprovisioned backup.
-
-Routing must be observable.
-
-## 9.4 Queues and Workers
-
-Queues decouple request intake from work execution.
-
-Benefits:
-
-* absorb bursts,
-* control concurrency,
-* retry failed work,
-* run background jobs,
-* isolate slow tasks.
-
-Costs:
-
-* queue wait,
-* delayed failures,
-* duplicate work,
-* harder cancellation,
-* hidden overload.
-
-Metrics:
-
-* queue length,
-* age of oldest job,
-* dequeue rate,
-* retry count,
-* dead-letter count,
-* worker utilization,
-* task duration.
-
-## 9.5 Batching
-
-Batching improves throughput by grouping work.
-
-In LLM systems, batching can improve GPU utilization, but it can also increase queueing delay.
-
-Tradeoff:
-
-```text
-larger batch -> better throughput -> worse latency
-smaller batch -> better latency -> worse utilization
-```
-
-Interactive systems often need dynamic batching with strict latency budgets.
-
-## 9.6 Caching
-
-Caches reduce repeated work.
-
-Useful caches:
-
-* response cache,
-* prompt-prefix cache,
-* embedding cache,
-* retrieval result cache,
-* document metadata cache,
-* tool result cache.
-
-Dangerous cache mistakes:
-
-* missing tenant or permission in cache key,
-* stale policy data,
-* caching unsafe personalized responses,
-* unbounded memory cache,
-* no version in key,
-* no invalidation strategy.
-
-Cache keys should include correctness-relevant dimensions:
-
-```text
-tenant
-user or permission scope
-model version
-prompt version
-retrieval index version
-input hash
-```
-
-## 9.7 Retries and Circuit Breakers
-
-Retries help transient failures.
-
-Retries hurt when:
-
-* the failure is systematic,
-* the operation is not idempotent,
-* downstream is overloaded,
-* clients retry at the same time,
-* retry work continues after user cancellation.
-
-Good retry policy:
-
-* bounded attempts,
-* exponential backoff,
-* jitter,
-* deadline-aware,
-* idempotency-aware,
-* observable.
-
-Circuit breakers stop sending traffic to unhealthy dependencies.
-
-Fallbacks should be explicit:
-
-* smaller model,
-* cached response,
-* delayed job,
-* partial answer,
-* human review,
-* clear error.
-
-## 9.8 Observability
-
-A request trace should answer:
-
-* who made the request?
-* what route did it take?
-* which prompt version was used?
-* which model version was used?
-* what context was retrieved?
-* what tools were called?
-* how many tokens were used?
-* how long did each stage take?
-* did validation pass?
-* did fallback happen?
-* what was returned?
-
-Metrics should include:
-
-* request rate,
-* error rate,
-* latency percentiles,
-* time to first token,
-* time to final token,
-* token counts,
-* cost,
-* cache hit rate,
-* queue wait,
-* model latency,
-* DB latency,
-* retrieval latency,
-* fallback rate,
-* validation failure rate.
-
-Without observability, AI failures become anecdotes.
-
-## 9.9 Common Failure Cascades
-
-### Retry Storm
-
-```text
-provider slows down
-  -> requests timeout
-  -> clients retry
-  -> traffic increases
-  -> provider slows more
-```
-
-Mitigation:
-
-* backoff,
-* jitter,
-* circuit breaker,
-* admission control,
-* queue limits.
-
-### Blocked Event Loop
-
-```text
-async API service
-  -> synchronous DB call
-  -> event loop blocks
-  -> all requests wait
-```
-
-Mitigation:
-
-* async drivers,
-* thread pool for blocking calls,
-* profiling event loop lag,
-* timeouts.
-
-### Slow Metadata Query
-
-```text
-prompt construction
-  -> permission metadata query
-  -> missing index
-  -> slow time to first token
-```
-
-Mitigation:
-
-* query plan,
-* index,
-* cache,
-* precomputed permissions,
-* pagination.
-
-### Memory Leak
-
-```text
-trace buffer stores full prompts
-  -> memory grows
-  -> GC pressure rises
-  -> latency rises
-  -> worker OOMs
-```
-
-Mitigation:
-
-* truncation,
-* streaming traces,
-* bounded buffers,
-* memory profiling,
-* worker recycling.
-
----
-
-# 10. Interview Answer Patterns
-
-The best answers follow a structure:
-
-```text
-define the concept
-  -> identify the bottleneck or failure mode
-  -> explain the tradeoff
-  -> give a production debugging or design step
-```
-
-## 10.1 "How Would You Optimize a Slow SQL Query?"
-
-Strong answer:
-
-> I would start with the query plan. I want to know whether the bottleneck is scan, join, sort, aggregation, or row estimation. Then I would check indexes, filter selectivity, join order, result size, and whether partition pruning is happening. If the query is repeatedly expensive and can tolerate staleness, I might use a materialized view. I would verify the fix on production-like data and watch write overhead from any new index.
-
-What this answer shows:
-
-* you do not guess,
-* you understand plans,
-* you understand index tradeoffs,
-* you understand freshness and materialization,
-* you validate with realistic data.
-
-## 10.2 "Explain Python's GIL"
-
-Strong answer:
-
-> The GIL is a CPython lock that allows only one thread to execute Python bytecode at a time. It simplifies interpreter internals and reference counting. It mainly limits CPU-bound parallelism in Python threads. IO-bound threads can still overlap, and native extensions can release the GIL. For CPU-bound work I would use multiprocessing, vectorized libraries, compiled extensions, or separate workers. For IO-heavy orchestration, async or threads can still be effective.
-
-What this answer shows:
-
-* you know what the GIL is,
-* you know what it does not mean,
-* you can choose a concurrency model.
-
-## 10.3 "How Would You Debug a Memory Leak?"
-
-Strong answer:
-
-> I would first confirm whether memory grows without bound and whether it is Python heap, native memory, or expected allocator behavior. Then I would reproduce under load, compare heap snapshots, inspect object growth by type, and check unbounded caches, pending tasks, callbacks, traces, and large retained payloads. If native memory is involved, I would inspect tensors or extension libraries. The fix might be bounding caches, releasing references, streaming large data, cancelling tasks, or isolating work in restartable workers.
-
-What this answer shows:
-
-* you know Python can leak through reachability,
-* you distinguish RSS from live objects,
-* you know native memory exists,
-* you propose practical fixes.
-
-## 10.4 "How Would You Build a Scalable Python Backend for AI Inference?"
-
-Strong answer:
-
-> I would separate the API layer from inference workers. The API layer handles auth, validation, quotas, routing, deadlines, and streaming. Workers handle model calls, batching, retries where safe, and runtime-specific metrics. I would add queues for background work, bounded concurrency for backpressure, caches with tenant-aware keys, timeouts, circuit breakers, and fallback routes. Observability needs request IDs, model and prompt versions, token counts, queue delay, DB time, model latency, and cost.
-
-What this answer shows:
-
-* you understand service boundaries,
-* you understand backpressure,
-* you understand AI-specific observability,
-* you understand cost and reliability.
-
-## 10.5 "How Would You Design a Data Pipeline for ML?"
-
-Strong answer:
-
-> I would define sources, schemas, freshness requirements, transformations, labels, validation checks, storage layers, and consumers. I would keep raw immutable data, validate schemas at ingestion, create versioned feature definitions, support backfills, and track lineage. I would monitor freshness, null rates, distribution drift, duplicates, and training-serving skew. The pipeline should fail loudly on data quality issues rather than silently training or serving corrupted features.
-
-What this answer shows:
-
-* you understand data lifecycle,
-* you understand correctness,
-* you understand ML-specific pipeline risks.
-
----
-
-# 11. Tech Stack Mental Models for Applied AI Roles
-
-The job descriptions that matter for frontier AI engineering do not ask for tools as trivia.
-
-They ask for tools because the tools reveal the shape of the work:
-
-* training large models,
-* scaling reinforcement learning,
-* debugging distributed GPU jobs,
-* building retrieval and knowledge systems,
-* serving LLMs with low latency,
-* running evals and experiments reproducibly,
-* sandboxing long-horizon agents,
-* making research infrastructure reliable enough that scientists can move fast.
-
-The goal of this section is to build mental models for the stack. You do not need to be an expert in every tool. You do need to understand what problem each tool solves, what abstraction it exposes, what it composes with, and what failure modes it creates.
-
-The best mental model is layered:
-
-```text
-data and environments
-  -> tensors and model code
-  -> training / post-training loop
-  -> distributed execution
-  -> inference serving
-  -> product orchestration
-  -> evaluation
-  -> observability
-  -> deployment and operations
-```
-
-Different roles emphasize different layers. RL infrastructure roles emphasize rollout workers, reward pipelines, distributed training, cluster scheduling, and reproducibility. Knowledge-system roles emphasize ingestion, indexing, ranking, RAG, query understanding, and evals. Product AI roles emphasize API design, retrieval, tools, safety boundaries, serving, observability, and rollout.
-
-## 11.1 Where Tech Stacks Fit in This Study Guide
-
-The stack is not a separate topic from the earlier chapters. It is the implementation surface of those ideas.
-
-| Chapter | Stack connection |
-| ------- | ---------------- |
-| Chapter 0 | Tensors, gradients, autograd, Transformer compute, PyTorch, TensorFlow, JAX |
-| Chapter 1 | Model APIs, structured outputs, prompt/version tooling, app integration |
-| Chapter 2 | FAISS, pgvector, vector databases, Elasticsearch, rerankers, knowledge graphs |
-| Chapter 3 | LangGraph, Temporal, MCP, sandboxed tools, workflow engines |
-| Chapter 4 | Eval harnesses, judge tooling, tracing, regression datasets |
-| Chapter 5 | RLHF, DPO, PPO, reward modeling, W&B, MLflow, distributed training loops |
-| Chapter 6 | vLLM, TGI, Triton Inference Server, Ray Serve, Redis, queues, Kubernetes |
-| Chapter 7 | Cloud architecture, auth, policy engines, rollout systems, platform composition |
-| Chapter 8 | GPUs, TPUs, CUDA, Triton kernels, JAX, high-performance optimization |
-| Chapter 9 | The mental-model index tying the concrete technologies together |
-
-## 11.2 How to Learn a Technology
-
-For any tool, ask seven questions:
-
-1. What abstraction does it expose?
-2. What bottleneck or complexity does it remove?
-3. What does it make harder?
-4. What does it compose with?
-5. What assumptions does it make?
-6. What failure modes does it introduce?
-7. What would I monitor or test in production?
-
-Weak answer:
-
-> I know Kubernetes.
-
-Strong answer:
-
-> Kubernetes schedules and manages containerized workloads. In AI systems, it is useful for API services, workers, inference deployments, and some training jobs. But GPU scheduling, gang scheduling, storage locality, startup time, and observability still need careful design. For batch research clusters, Slurm may be a better fit.
-
-That is the level of answer you want.
-
----
-
-## 11.3 The Framework Layer: PyTorch, TensorFlow, JAX
-
-The framework layer is where mathematical programs become executable tensor programs.
-
-Mental model:
-
-```text
-Python code
-  -> tensor operations
-  -> computation graph or execution trace
-  -> gradients
-  -> optimizer update
-  -> GPU / TPU kernels
-```
-
-### PyTorch
-
-PyTorch's core mental model is:
-
-```text
-eager tensor program + autograd tape
-```
-
-You write Python code that runs immediately. Tensor operations execute eagerly. If tensors require gradients, PyTorch records the operations needed to compute gradients later.
-
-This makes PyTorch feel like normal Python:
-
-* easy to debug,
-* easy to inspect intermediate tensors,
-* easy to write custom training loops,
-* easy to prototype research ideas.
-
-Important concepts:
-
-* `Tensor`: multidimensional array with device and dtype.
-* `nn.Module`: composable model component with parameters.
-* `autograd`: automatic differentiation engine.
-* `optimizer`: parameter update rule.
-* `Dataset` / `DataLoader`: data iteration.
-* `cuda`: GPU device placement.
-* `torch.compile`: compilation path for optimizing eager programs.
-
-Where it sits:
-
-```text
-data loader -> PyTorch model -> loss -> autograd -> optimizer -> checkpoint
-```
-
-What it composes with:
-
-* Hugging Face Transformers for model definitions and pretrained weights,
-* DeepSpeed and FSDP for distributed training,
-* W&B or MLflow for experiment tracking,
-* Triton kernels for custom GPU operations,
-* vLLM or TGI for serving models trained or exported from the PyTorch ecosystem.
-
-Why jobs ask for it:
-
-Frontier AI work often means changing model code, debugging training loops, testing new objectives, or optimizing throughput. PyTorch gives researchers and engineers a flexible surface for that work.
-
-Failure modes:
-
-* silent CPU/GPU device mismatch,
-* accidental graph retention causing memory growth,
-* inefficient data loading starving GPUs,
-* too many small operations causing overhead,
-* distributed training hangs,
-* checkpoint incompatibility,
-* mixed-precision instability.
-
-Interview framing:
-
-> PyTorch is strong for research iteration because it is eager and Pythonic. The mental model is tensors plus autograd plus modules. At scale, the hard parts become data loading, memory, distributed training, kernel efficiency, checkpointing, and observability.
-
-### TensorFlow
-
-TensorFlow's original mental model is:
-
-```text
-define computation graph -> optimize graph -> execute graph
-```
-
-Modern TensorFlow also supports eager execution, but a key idea remains graph compilation through `tf.function`.
-
-Graph execution can enable:
-
-* optimization,
-* portability,
-* deployment,
-* serving,
-* mobile and edge targets,
-* static analysis.
-
-Important concepts:
-
-* `Tensor`: array data structure,
-* `tf.function`: traces Python into graph form,
-* Keras: high-level model API,
-* `tf.data`: data pipeline API,
-* TensorBoard: visualization and experiment inspection,
-* TensorFlow Serving: model serving system,
-* TFLite: mobile/edge deployment path.
-
-Where it sits:
-
-```text
-data pipeline -> Keras / TensorFlow model -> graph execution -> serving artifact
-```
-
-What it composes with:
-
-* TFX-style production ML pipelines,
-* TensorFlow Serving,
-* TensorBoard,
-* mobile/edge deployment stacks,
-* data validation and transformation tooling.
-
-Tradeoff:
-
-TensorFlow can be strong when graph optimization and production deployment are central. PyTorch often feels easier for research iteration and debugging. Modern usage has converged somewhat, but the historical mental models still matter in interviews.
-
-Interview framing:
-
-> TensorFlow is graph-oriented at heart. That can make deployment and optimization cleaner, but dynamic research code can feel less direct than PyTorch. The tradeoff is graph optimizability and production paths versus eager debugging flexibility.
-
-### JAX
-
-JAX's mental model is:
-
-```text
-NumPy-like functions + program transformations
-```
-
-The important transformations are:
-
-* `grad`: take gradients of functions,
-* `jit`: compile functions,
-* `vmap`: vectorize functions,
-* `pmap` / `pjit`: distribute computation across devices.
-
-JAX asks you to think more functionally:
-
-```text
-params, batch -> loss
-```
-
-Instead of mutating model state inside object-oriented modules, you often pass state explicitly through pure functions.
-
-What it composes with:
-
-* XLA compilation,
-* Flax or Haiku model libraries,
-* Optax optimizers,
-* TPU pods and GPU clusters,
-* custom research training loops.
-
-Why jobs ask for it:
-
-JAX is popular in high-performance research environments because transformations make it powerful for vectorization, compilation, and distributed computation.
-
-Failure modes:
-
-* dynamic Python control flow can fight compilation,
-* recompilation can destroy performance,
-* shape changes can be expensive,
-* debugging compiled code can be harder,
-* state management requires discipline.
-
-Interview framing:
-
-> JAX is not just another neural network library. It is a system for transforming numerical Python functions. The power comes from `jit`, `grad`, `vmap`, and distributed transformations. The tradeoff is that you need to write code in a more functional and shape-stable way.
-
-### PyTorch vs TensorFlow vs JAX
-
-| Framework | Mental model | Best fit | Main tradeoff |
-| --------- | ------------ | -------- | ------------- |
-| PyTorch | Eager tensor programs plus autograd | Research iteration, LLM work, flexible training loops | Scaling and optimization require extra systems work |
-| TensorFlow | Graph-oriented computation and deployment | Production ML, graph optimization, serving, mobile/edge | Less natural for dynamic research code |
-| JAX | Functional numerical programs plus transformations | High-performance research, TPU/GPU scaling, compilation | Requires functional style and shape discipline |
-
-The interview answer should not be "one is better." It should be:
-
-> They optimize for different workflows. PyTorch optimizes for flexible research iteration, TensorFlow for graph/deployment-oriented production paths, and JAX for composable program transformations and high-performance compiled numerical code.
-
----
-
-## 11.4 Model and Training Library Layer
-
-Above the tensor framework are libraries that package model architectures, tokenizers, training utilities, and distributed training patterns.
-
-Mental model:
-
-```text
-raw data
-  -> tokenizer
-  -> tensors
-  -> model
-  -> loss
-  -> gradients
-  -> optimizer
-  -> checkpoint
-```
-
-### Hugging Face Transformers
-
-Transformers is a standardized interface to model architectures, pretrained checkpoints, tokenizers, and generation utilities.
-
-Mental model:
-
-```text
-model name -> config + tokenizer + weights + model class
-```
-
-What it is good for:
-
-* loading pretrained models,
-* fine-tuning,
-* inference prototypes,
-* standardizing model APIs,
-* comparing architectures,
-* accessing community checkpoints.
-
-What it composes with:
-
-* PyTorch, TensorFlow, JAX/Flax backends,
-* Datasets,
-* Tokenizers,
-* Accelerate,
-* PEFT/LoRA tooling,
-* TRL for post-training,
-* model hubs and registries.
-
-Failure modes:
-
-* tokenizer/model mismatch,
-* hidden defaults in generation configs,
-* memory surprises from model size,
-* checkpoint compatibility issues,
-* prototype code accidentally becoming production code.
-
-### Datasets and Tokenizers
-
-Datasets manage data loading, streaming, sharding, and preprocessing.
-
-Tokenizers are the boundary between raw text and model tensors.
-
-Mental model:
-
-```text
-text -> token ids -> tensors -> model
-```
-
-Why tokenizers matter:
-
-* they define vocabulary,
-* they affect sequence length,
-* they affect cost,
-* they affect multilingual behavior,
-* they must match the model checkpoint.
-
-In large-scale training, tokenization can become a real throughput bottleneck.
-
-### Accelerate
-
-Accelerate provides a simpler abstraction over multi-device training.
-
-Mental model:
-
-```text
-same training loop -> configured device/distributed setup
-```
-
-It is useful when you want code to run on CPU, one GPU, multiple GPUs, or distributed environments with fewer changes.
-
-### DeepSpeed
-
-DeepSpeed is a training optimization system for large models.
-
-The key mental model is memory partitioning.
-
-ZeRO reduces memory pressure by sharding:
-
-* optimizer states,
-* gradients,
-* parameters.
-
-Instead of every GPU storing everything, GPUs store different pieces and communicate when needed.
-
-Tradeoff:
-
-* bigger models and batches fit,
-* communication and configuration complexity increase.
-
-### PyTorch FSDP
-
-Fully Sharded Data Parallel is PyTorch's native approach to sharding model states across devices.
-
-Mental model:
-
-```text
-each GPU stores shards
-  -> gather parameters for computation
-  -> compute
-  -> reduce/scatter gradients
-```
-
-DeepSpeed ZeRO and FSDP solve similar memory-scaling problems, with different APIs and ecosystem integration.
-
-### Fairseq and Megatron-LM Style Stacks
-
-Fairseq and Megatron-style stacks represent research-oriented large-scale sequence modeling systems.
-
-Mental model:
-
-```text
-model research code + distributed training patterns + optimized kernels + large-scale configs
-```
-
-They matter because many frontier training systems are not just simple library calls. They are large codebases that encode model architecture, data loading, distributed parallelism, checkpointing, and evaluation.
-
-### PEFT and LoRA
-
-Chapter 5 covers the theory of parameter-efficient fine-tuning: why freezing the base model and training a small adaptation can be a useful post-training strategy.
-
-Here, the focus is the engineering side: how PEFT/LoRA shows up in the stack, how it composes with training libraries and serving systems, and what has to be tracked so adapters do not become ambiguous artifacts.
-
-Parameter-efficient fine-tuning changes a small number of trainable parameters instead of updating the full model.
-
-LoRA's mental model is:
-
-```text
-frozen base weights + small trainable low-rank adapters
-```
-
-Why it matters:
-
-* much lower GPU memory,
-* cheaper fine-tuning,
-* easier adapter swapping,
-* useful domain adaptation,
-* faster experimentation.
-
-What it composes with:
-
-* Transformers,
-* PEFT libraries,
-* quantization,
-* Accelerate,
-* DeepSpeed/FSDP for larger runs,
-* model registries that track base model plus adapter version.
-
-Failure modes:
-
-* adapter/base mismatch,
-* overfitting narrow data,
-* degraded general capability,
-* confusing deployment if the adapter is not loaded with the intended base model,
-* evaluation that misses slices where the adapter hurts.
-
-Interview framing:
-
-> The theory of LoRA belongs in post-training: freeze the base model and train a low-rank adaptation. The engineering concern is artifact integrity. I would track the base model, tokenizer, adapter version, training data, and eval results together because the adapter alone is not a complete deployable model.
-
-### Dataset and Checkpoint Formats
-
-Large-scale AI work is also about file formats.
-
-Common dataset/storage formats:
-
-* **Parquet:** columnar analytics format, good for warehouse-style datasets and feature tables.
-* **Arrow:** in-memory columnar format, useful for efficient data interchange and Hugging Face Datasets internals.
-* **JSONL:** simple line-delimited records, easy for prompts and small/medium corpora but inefficient at huge scale.
-* **WebDataset / tar shards:** shard-based format often used for large image or multimodal datasets.
-* **TFRecord:** TensorFlow-oriented record format, common in TF pipelines.
-
-Common checkpoint formats:
-
-* PyTorch checkpoints,
-* `safetensors`,
-* TensorFlow SavedModel,
-* sharded checkpoints for large models,
-* optimizer-state checkpoints for training resumption.
-
-Mental model:
-
-```text
-data format determines how fast and safely bytes become batches
-checkpoint format determines how reliably training or serving can resume
-```
-
-Why jobs care:
-
-Many large-scale failures are not algorithmic. They are data throughput, checkpoint corruption, slow startup, bad sharding, or unreproducible artifact problems.
-
-Interview framing:
-
-> I would treat datasets and checkpoints as production artifacts. They need versioning, integrity checks, metadata, lineage, and compatibility with the training or serving stack.
-
----
-
-## 11.5 RL and Post-Training Stack
-
-Post-training turns a pretrained model into a model that follows instructions, uses tools, refuses unsafe requests, or performs well on specific tasks.
-
-Mental model:
-
-```text
-policy
-  -> rollout / completion
-  -> reward or preference signal
-  -> optimization update
-  -> eval
-  -> new policy
-```
-
-### Gym and Gymnasium
-
-Gym's mental model is the environment interface:
-
-```text
-observation = env.reset()
-observation, reward, done, info = env.step(action)
-```
-
-This interface matters because RL is about interaction, not just static labels.
-
-For LLM agents, an environment might be:
-
-* a code repository,
-* a browser,
-* a tool sandbox,
-* a game,
-* a math problem environment,
-* a simulated user,
-* a computer-use task.
-
-### TRL and RLHF Libraries
-
-TRL-style libraries package common post-training workflows:
-
-* supervised fine-tuning,
-* reward modeling,
-* PPO,
-* DPO,
-* preference optimization.
-
-Mental model:
-
-```text
-prompts -> candidate responses -> preference/reward -> policy update
-```
-
-They compose with:
-
-* Transformers,
-* Datasets,
-* Accelerate,
-* DeepSpeed/FSDP,
-* W&B/MLflow,
-* eval harnesses.
-
-### Ray and RLlib
-
-Ray provides distributed Python tasks and actors.
-
-RLlib builds RL abstractions on top of distributed workers.
-
-Mental model:
-
-```text
-driver
-  -> rollout workers
-  -> reward/eval workers
-  -> learner workers
-  -> checkpoint/eval
-```
-
-Ray is useful when workloads are Python-native, distributed, and irregular.
-
-### Custom Rollout Workers
-
-Frontier labs often build custom rollout infrastructure because LLM RL workloads are specialized:
-
-* model-generated trajectories can be long,
-* tool calls may be slow,
-* rewards may require separate models,
-* environments may require sandboxes,
-* data needs careful logging and replay,
-* throughput and reproducibility matter.
-
-Job-role connection:
-
-The roles mention PPO, DPO, RLHF, reward modeling, rollout pipelines, reward pipelines, distributed workloads, throughput, reliability, and reproducibility. This is exactly this layer.
-
----
-
-## 11.6 Distributed Training and Cluster Orchestration
-
-Large training jobs are distributed systems.
-
-Mental model:
-
-```text
-training job
-  -> scheduler
-  -> nodes
-  -> GPUs
-  -> communication
-  -> checkpoints
-  -> metrics
-```
-
-### Kubernetes
-
-Kubernetes orchestrates containers.
-
-It handles:
-
-* scheduling,
-* service discovery,
-* health checks,
-* restarts,
-* deployments,
-* autoscaling,
-* resource requests and limits.
-
-AI use cases:
-
-* API services,
-* inference workers,
-* embedding services,
-* retrieval services,
-* batch jobs,
-* some training jobs.
-
-Tradeoffs:
-
-Kubernetes is excellent for service/platform workloads. GPU training at cluster scale may require extra tooling for gang scheduling, topology awareness, storage, and job lifecycle management.
-
-### Slurm
-
-Slurm is an HPC-style batch scheduler.
-
-Mental model:
-
-```text
-submit job -> wait in queue -> allocated nodes -> run script -> release resources
-```
-
-It is common in research clusters because training jobs often look like long-running batch jobs that need a specific number of nodes and GPUs.
-
-Kubernetes vs Slurm:
-
-| System | Mental model | Best fit |
-| ------ | ------------ | -------- |
-| Kubernetes | container orchestration for services and jobs | production services, inference, platform workloads |
-| Slurm | batch scheduling for cluster jobs | research training, HPC-style GPU jobs |
-
-### Ray
-
-Ray is a distributed execution framework for Python.
-
-Mental model:
-
-```text
-Python function -> remote task
-Python class -> remote actor
-```
-
-Ray is useful for:
-
-* distributed data processing,
-* RL rollouts,
-* parallel evaluation,
-* model serving,
-* task orchestration.
-
-### Docker and Containers
-
-Containers package code, dependencies, and runtime environment.
-
-Mental model:
-
-```text
-code + dependencies + OS-level runtime -> image -> container
-```
-
-Containers improve reproducibility, but they do not solve everything:
-
-* GPU drivers still matter,
-* data paths still matter,
-* network and permissions still matter,
-* image size and startup time matter.
-
-### NCCL
-
-NCCL is a communication library for GPUs.
-
-It underlies common distributed training operations:
-
-* all-reduce,
-* broadcast,
-* reduce-scatter,
-* all-gather.
-
-Mental model:
-
-```text
-GPU workers compute local gradients
-  -> NCCL communicates across GPUs
-  -> workers synchronize updates
-```
-
-Why it matters:
-
-Distributed training performance often depends on communication. If NCCL is slow or hanging, GPUs sit idle even if model code is correct.
-
-### Parallelism Types
-
-Large-model training usually combines several kinds of parallelism.
-
-| Type | Mental model | What it solves | Cost |
-| ---- | ------------ | -------------- | ---- |
-| Data parallelism | Replicate model, split data | More batch throughput | Gradient synchronization |
-| Tensor parallelism | Split matrix operations across GPUs | Layers too large for one GPU | Frequent communication |
-| Pipeline parallelism | Split layers across stages | Model depth too large for one GPU | Pipeline bubbles and scheduling |
-| Sequence parallelism | Split sequence dimension or related activations | Long sequence activation memory | More complex implementation |
-| Expert parallelism | Place MoE experts across devices | Many experts / large sparse models | Routing and load balance |
-
-Mental model:
-
-```text
-data parallelism splits examples
-tensor parallelism splits math inside layers
-pipeline parallelism splits layers
-sequence parallelism splits long-token activations
-expert parallelism splits sparse expert capacity
-```
-
-Why this matters:
-
-When a training run is slow, you need to know whether the bottleneck is compute, memory, communication, pipeline bubbles, data loading, or checkpointing. Parallelism choices change all of those.
-
-Interview framing:
-
-> Distributed training is not one trick. I would choose the parallelism strategy based on what does not fit: batch size, parameters, activations, sequence length, or expert capacity. Then I would monitor GPU utilization, communication time, memory, data loading, and checkpoint overhead.
-
-### Scale-Up, Scale-Out, and MoE Rack Layout
-
-Large sparse models are shaped by physical hardware topology.
-
-Two network domains matter:
-
-| Domain | Mental model | Typical property |
-| ------ | ------------ | ---------------- |
-| Scale-up | fast local accelerator fabric inside a rack or pod | high bandwidth, low latency, dense connectivity |
-| Scale-out | network between racks or pods | slower, more hops, more topology constraints |
-
-MoE layers are especially sensitive to this because expert routing creates all-to-all communication.
-
-Mental model:
-
-```text
-tokens on every GPU
-  -> router chooses experts
-  -> tokens are sent to expert GPUs
-  -> expert outputs are sent back and combined
-```
-
-If experts live inside one fast scale-up domain, any GPU can send tokens to any expert with high bandwidth. If the expert layer crosses rack boundaries, many routed tokens must use slower scale-out links.
-
-This is why one rack or one scale-up domain becomes a natural boundary for an MoE layer. The model architecture wants:
-
-```text
-all-to-all expert traffic
-  -> fast dense interconnect
-  -> keep experts inside the scale-up domain when possible
-```
-
-Interview framing:
-
-> MoE is not just an algorithmic sparsity trick. It creates an all-to-all communication pattern, so the physical interconnect can determine how large an expert-parallel group should be.
-
-### Why Expert Parallelism Fits MoE
-
-Expert parallelism places different experts on different devices.
-
-This matches the structure of an MoE layer:
-
-```text
-many experts
-  -> split experts across GPUs
-  -> route tokens to the selected experts
-```
-
-The good part:
-
-* active compute per token can stay low,
-* total parameter capacity can grow,
-* each GPU only owns a subset of experts.
-
-The hard part:
-
-* token routing can be imbalanced,
-* all-to-all communication can dominate,
-* expert placement must respect topology,
-* larger sparsity may need larger batches to amortize weight movement,
-* total parameter memory still has to fit somewhere.
-
-This is the systems reason sparse models often depend on careful co-design between model architecture, router behavior, batch size, and hardware topology.
-
-### Pipeline Parallelism Limits
-
-Pipeline parallelism splits layers across stages:
-
-```text
-layers 1-20 -> stage 1
-layers 21-40 -> stage 2
-layers 41-60 -> stage 3
-```
-
-It helps when model weights do not fit in one device or one scale-up domain.
-
-But it introduces pipeline bubbles:
-
-```text
-start of batch:
-  later stages wait
-
-end of batch:
-  earlier stages wait
-```
-
-Micro-batches reduce idle time by keeping multiple chunks in flight. This is easier during inference because there is only a forward pass. During training, the backward pass, gradient accumulation, and optimizer step make scheduling much more complicated.
-
-The deeper limitation for LLM inference is KV cache.
-
-Pipeline parallelism divides model weights across stages, but it does not necessarily reduce KV-cache pressure in the way people first expect. To keep $P$ pipeline stages busy, the system often needs roughly $P$ micro-batches in flight. Splitting layers across $P$ stages reduces per-stage KV layers, but increasing in-flight micro-batches pushes active sequence count up. Those effects can cancel.
-
-Mental model:
-
-```text
-pipeline parallelism:
-  helps weight capacity
-  adds scheduling complexity
-  creates bubbles
-  can add cross-stage latency
-  does not magically solve long-context KV pressure
-```
-
-This is why pipeline parallelism is often a tradeoff rather than a pure win.
-
-### Pipeline Parallelism and Research Iteration
-
-Pipeline boundaries can also constrain architecture.
-
-If a model has simple sequential layers, splitting layers across stages is natural. But newer architectures may include:
-
-* attention patterns that refer to residuals from many previous layers,
-* alternating global and local attention layers,
-* nonuniform MoE or routing behavior,
-* layer types with very different compute or memory cost.
-
-Those features can create load imbalance or force awkward cross-stage communication.
-
-The engineering risk:
-
-```text
-parallelism scheme hard-codes architecture assumptions
-  -> model researchers avoid changes that break the system
-  -> iteration slows down
-```
-
-Strong infrastructure should support the model architecture rather than accidentally dictating it.
-
-### Checkpointing and Fault Tolerance
-
-Large training jobs fail.
-
-They fail because:
-
-* nodes die,
-* GPUs error,
-* network links degrade,
-* jobs are preempted,
-* storage stalls,
-* code has bugs,
-* data shards are corrupt.
-
-Checkpointing is what makes failure recoverable.
-
-A good checkpoint includes:
-
-* model parameters,
-* optimizer state,
-* scheduler state,
-* random number generator state,
-* data-loader position or shard state,
-* training step,
-* config,
-* code/data version references.
-
-For very large models, checkpoints are often sharded. That means restore logic must know how shards map back to distributed ranks.
-
-Interview framing:
-
-> I would design checkpointing as part of the training system, not an afterthought. A checkpoint should allow reliable resume with the same optimizer, scheduler, data position, and config. I would test restore regularly because untested checkpoints are just expensive files.
-
----
-
-## 11.7 Inference and Serving Stack
-
-Serving systems turn trained models into product behavior.
-
-Mental model:
-
-```text
-request
-  -> gateway
-  -> router
-  -> queue / batcher
-  -> model runtime
-  -> stream tokens
-  -> trace
-```
-
-### vLLM
-
-vLLM is a high-throughput LLM serving system.
-
-Mental model:
-
-```text
-continuous batching + efficient KV cache management
-```
-
-It is known for PagedAttention, which manages KV cache memory more efficiently.
-
-Good for:
-
-* high-throughput LLM serving,
-* many concurrent requests,
-* open-weight model deployment.
-
-Interview focus:
-
-* continuous batching,
-* KV-cache pressure,
-* prefill vs decode,
-* throughput vs latency.
-
-### TGI
-
-Text Generation Inference is Hugging Face's LLM serving stack.
-
-Mental model:
-
-```text
-standardized server for text generation models
-```
-
-Good for:
-
-* serving Hugging Face-compatible models,
-* production-ish deployment,
-* streaming generation,
-* batching and model management.
-
-### Triton Inference Server
-
-Triton Inference Server serves models across multiple frameworks.
-
-Mental model:
-
-```text
-model repository + inference server + batching + multiple backends
-```
-
-Good for:
-
-* heterogeneous model serving,
-* non-LLM inference,
-* ensembles,
-* GPU inference services.
-
-Do not confuse Triton Inference Server with the Triton language for writing GPU kernels.
-
-### Ray Serve
-
-Ray Serve is Python-native model serving on top of Ray.
-
-Mental model:
-
-```text
-Python deployments + distributed routing + autoscaling
-```
-
-Good for:
-
-* Python-heavy inference pipelines,
-* multi-stage inference graphs,
-* custom routing,
-* integration with Ray workloads.
-
-### FastAPI and Starlette
-
-FastAPI and Starlette sit at the API layer.
-
-Mental model:
-
-```text
-HTTP request -> validation -> async handler -> response
-```
-
-They compose with:
-
-* Pydantic schemas,
-* async model clients,
-* Redis,
-* queues,
-* tracing middleware,
-* auth systems.
-
-They should not become the whole inference platform. Keep API concerns separate from GPU/runtime concerns.
-
-### Redis and Queues
-
-Redis is often used for:
-
-* caching,
-* rate limiting,
-* coordination,
-* lightweight queues,
-* session state.
-
-Celery, Dramatiq, and RQ provide background task queues.
-
-Mental model:
-
-```text
-API accepts work -> queue stores work -> workers process work
-```
-
-Failure modes:
-
-* unbounded queue growth,
-* duplicate jobs,
-* stuck jobs,
-* missing idempotency,
-* overloaded workers,
-* stale cache values.
-
----
-
-## 11.8 Data Engineering and ETL Stack
-
-Data systems feed training, retrieval, evals, monitoring, and learning loops.
-
-Mental model:
-
-```text
-raw events
-  -> durable storage
-  -> transformation
-  -> features / evals / training data
-  -> monitoring
-```
-
-### Spark
-
-Spark is distributed batch processing.
-
-Mental model:
-
-```text
-large dataset -> partitioned transformations -> distributed execution
-```
-
-Good for:
-
-* large historical datasets,
-* joins,
-* aggregations,
-* feature generation,
-* ETL.
-
-Failure modes:
-
-* shuffles dominate runtime,
-* skewed partitions,
-* memory pressure,
-* expensive joins,
-* poor file layout.
-
-### Beam
-
-Beam provides a unified batch and streaming programming model.
-
-Mental model:
-
-```text
-pipeline definition -> runner executes it
-```
-
-The same logical pipeline can run on different runners.
-
-Good for:
-
-* systems that need both batch and streaming semantics,
-* windowing,
-* event-time processing,
-* portability across execution engines.
-
-### Dask
-
-Dask is Python-native distributed computation.
-
-Mental model:
-
-```text
-familiar Python dataframe/array tasks -> distributed scheduler
-```
-
-Good for:
-
-* Python teams,
-* parallel dataframes,
-* custom workflows,
-* workloads that do not fit neatly into Spark.
-
-### Kafka
-
-Kafka is a durable event log.
-
-Mental model:
-
-```text
-producers -> append events to topics -> consumers read offsets
-```
-
-Good for:
-
-* streaming events,
-* decoupling services,
-* replay,
-* near-real-time features,
-* monitoring pipelines.
-
-Failure modes:
-
-* consumer lag,
-* bad partition keys,
-* duplicate processing,
-* schema evolution,
-* poison messages.
-
-### Airflow, Dagster, Prefect
-
-These orchestrate workflows.
-
-Mental model:
-
-```text
-task graph -> scheduler -> retries -> lineage/metadata
-```
-
-Airflow is widely used for scheduled DAGs. Dagster emphasizes software-defined assets and lineage. Prefect emphasizes Pythonic workflows and operational ergonomics.
-
-### dbt
-
-dbt is a SQL transformation and analytics engineering tool.
-
-Mental model:
-
-```text
-raw warehouse tables -> versioned SQL models -> tested analytical datasets
-```
-
-It is useful when the transformation layer is mostly SQL and teams need tests, lineage, documentation, and repeatability.
-
-### Object Stores and Warehouses
-
-S3 and GCS are common storage backbones.
-
-Mental model:
-
-```text
-cheap durable object storage for datasets, checkpoints, logs, artifacts
-```
-
-Warehouses like BigQuery, Snowflake, and Redshift support analytical querying.
-
-They are not usually low-latency request-path databases. They are for analytics, training data, eval analysis, and reporting.
-
-### Feature Stores
-
-A feature store manages reusable ML features across training and serving.
-
-Mental model:
-
-```text
-feature definition
-  -> offline historical values
-  -> online low-latency values
-  -> consistent training and serving access
-```
-
-Examples include Feast-style systems and custom internal feature platforms.
-
-Why they matter:
-
-* reduce training-serving skew,
-* centralize feature definitions,
-* support point-in-time correct training data,
-* provide online low-latency feature lookup,
-* improve reuse across models.
-
-Tradeoffs:
-
-* operational complexity,
-* feature ownership,
-* freshness guarantees,
-* backfill complexity,
-* online/offline consistency.
-
-Interview framing:
-
-> I would use a feature store when multiple models need shared, versioned, point-in-time-correct features with online serving. For simpler systems, a warehouse plus careful pipeline contracts may be enough.
-
----
-
-## 11.9 Retrieval, Search, and Knowledge Systems Stack
-
-Knowledge systems are central to applied AI.
-
-Mental model:
-
-```text
-documents
-  -> parsing
-  -> chunking
-  -> embeddings / sparse index
-  -> retrieval
-  -> reranking
-  -> context assembly
-  -> model
-```
-
-### FAISS
-
-FAISS is a library for vector search.
-
-Mental model:
-
-```text
-local vector index inside your own service or batch job
-```
-
-Good for:
-
-* experiments,
-* local indexes,
-* custom retrieval systems,
-* high-performance vector search when you own the service layer.
-
-Tradeoff:
-
-You manage persistence, metadata, filtering, scaling, and service APIs yourself.
-
-### pgvector
-
-pgvector adds vector search to Postgres.
-
-Mental model:
-
-```text
-relational metadata + vector similarity in one database
-```
-
-Good for:
-
-* small to medium corpora,
-* apps already using Postgres,
-* strong metadata filtering,
-* simpler operations.
-
-Tradeoff:
-
-It may not match dedicated vector systems at very large scale or specialized latency targets.
-
-### Managed Vector Databases
-
-Examples include Pinecone, Weaviate, and Milvus-style systems.
-
-Mental model:
-
-```text
-dedicated vector retrieval service
-```
-
-Good for:
-
-* larger corpora,
-* operational offload,
-* vector-specific indexing and scaling,
-* APIs around metadata and namespaces.
-
-Tradeoff:
-
-You add a specialized dependency, cost, and possible vendor/platform constraints.
-
-### Elasticsearch and OpenSearch
-
-These are sparse search systems.
-
-Mental model:
-
-```text
-inverted index over terms + filtering + ranking
-```
-
-Good for:
-
-* BM25,
-* exact term matching,
-* logs,
-* document search,
-* filters and facets.
-
-They compose well with dense retrieval in hybrid search.
-
-### Rerankers
-
-Rerankers improve precision after first-stage retrieval.
-
-Mental model:
-
-```text
-retrieve many candidates cheaply -> score fewer candidates carefully
-```
-
-Cross-encoder rerankers look at query and document together, which is often better but slower.
-
-### Knowledge Graphs
-
-Knowledge graphs organize entities and relationships.
-
-Mental model:
-
-```text
-entities + relations + attributes -> graph queries and reasoning
-```
-
-Good for:
-
-* structured relationships,
-* provenance,
-* entity-centric retrieval,
-* multi-hop queries.
-
-Tradeoff:
-
-They require schema design, entity resolution, maintenance, and often still need text retrieval alongside them.
-
----
-
-## 11.10 Evaluation and Experimentation Stack
-
-Evals are the bridge between change and confidence.
-
-Mental model:
-
-```text
-candidate change
-  -> fixed eval set
-  -> metrics and slices
-  -> trace inspection
-  -> ship / canary / rollback
-```
-
-### pytest
-
-pytest is deterministic software testing.
-
-Use it for:
-
-* schema validators,
-* prompt rendering,
-* tool argument validation,
-* retrieval filters,
-* deterministic business rules,
-* regression tests around known failures.
-
-### Eval Harnesses
-
-OpenAI Evals-style or custom harnesses run model/system behavior against datasets.
-
-They should track:
-
-* input,
-* expected behavior,
-* model output,
-* scoring rubric,
-* model version,
-* prompt version,
-* retrieval context,
-* tool traces.
-
-### LangSmith, Braintrust, Ragas-Style Tools
-
-These tools help with traces, datasets, model comparison, and RAG evaluation.
-
-Mental model:
-
-```text
-production/eval traces -> labeled datasets -> comparison runs -> failure analysis
-```
-
-Do not treat any eval platform as magic. The quality comes from good datasets, clear rubrics, and careful slice analysis.
-
-### W&B and MLflow
-
-W&B and MLflow track experiments, metrics, artifacts, and models.
-
-Mental model:
-
-```text
-run config + code version + data version + metrics + artifacts
-```
+Online monitoring validates real behavior.
 
 Track:
 
-* hyperparameters,
-* model config,
-* dataset version,
-* checkpoint path,
-* metrics,
-* eval results,
-* logs,
-* system utilization,
-* random seed,
-* code commit.
+* task success
+* user satisfaction
+* human override rate
+* escalation rate
+* cost per successful task
+* latency percentiles
+* safety incidents
+* retrieval zero-result rate
+* tool failure rate
 
-### Hydra and Config Systems
+Use online metrics to detect distribution shift that offline evals missed.
 
-Config systems make experiments reproducible.
+## 10.4 System Evolution
 
-Mental model:
+The system evolves along several axes:
 
-```text
-experiment = code + data + config + seed + environment
-```
+* better retrieval
+* better prompts
+* better model routes
+* better tools
+* better product UX
+* better eval coverage
+* better policies
+* better human review workflows
 
-Without configuration discipline, research results become hard to reproduce.
-
-### Model Registries and Artifact Stores
-
-Model registries track deployable model artifacts and their metadata.
-
-Mental model:
-
-```text
-model artifact + metadata + lineage + approval state -> deployable version
-```
-
-A good registry tracks:
-
-* model weights,
-* tokenizer,
-* base model and adapter,
-* training data version,
-* eval results,
-* safety review status,
-* owner,
-* deployment status,
-* rollback target.
-
-Artifact stores hold the underlying files:
-
-* checkpoints,
-* datasets,
-* eval outputs,
-* logs,
-* generated samples,
-* model cards.
-
-Why this matters:
-
-A model is not just a `.pt` file. It is a bundle of weights, tokenizer, config, data lineage, eval evidence, and deployment policy.
-
-Interview framing:
-
-> I would not ship an anonymous checkpoint. I would promote a model through a registry with versioned artifacts, eval results, owner metadata, and rollback information.
-
-### CI for Research and ML Infrastructure
-
-Research code still needs tests.
-
-Useful checks:
-
-* unit tests for data transforms,
-* small overfit tests for training loops,
-* shape tests for model changes,
-* deterministic smoke tests,
-* checkpoint save/restore tests,
-* eval harness regression tests,
-* lint/type checks for production code,
-* launch tests for distributed job configs.
-
-The job-role signal is clear: teams want infrastructure that lets researchers move quickly without breaking the pipeline.
-
-Interview framing:
-
-> I would build CI that catches cheap failures before expensive GPU runs: import errors, config mistakes, data schema breaks, shape mismatches, checkpoint restore failures, and small training-loop regressions.
+Mature teams avoid changing everything at once. They version each layer and roll out changes independently so regressions can be attributed.
 
 ---
 
-## 11.11 Observability and Reliability Stack
+# 11. Tradeoffs
 
-Observability answers:
+System design is tradeoff selection.
 
-> What happened, where, and why?
+## 11.1 Autonomy vs Control
 
-Mental model:
+More autonomy can reduce human workload and handle flexible tasks. It also increases risk because the system may choose unexpected paths.
 
-```text
-request id
-  -> spans
-  -> metrics
-  -> logs
-  -> dashboard
-  -> alert
-  -> incident response
-```
+Use higher autonomy when actions are low risk, reversible, observable, and well evaluated. Use lower autonomy when actions are high impact, irreversible, ambiguous, or legally sensitive.
 
-### OpenTelemetry
+## 11.2 Latency vs Quality
 
-OpenTelemetry standardizes instrumentation for traces, metrics, and logs.
+Better answers often require more retrieval, stronger models, reranking, tool calls, and verification. Each adds latency.
 
-Mental model:
+For interactive products, stream partial responses, parallelize independent work, cache hot context, and use small models for routing. For high-stakes workflows, accept higher latency for verification and review.
 
-```text
-instrument code once -> export telemetry to different backends
-```
+## 11.3 Cost vs Reliability
 
-In AI systems, spans should cover:
+Reliability often costs more: stronger models, retries, evals, tracing, human review, and redundant infrastructure.
 
-* prompt construction,
-* retrieval,
-* reranking,
-* model call,
-* tool call,
-* validation,
-* streaming,
-* database queries.
+The right metric is not cost per request. It is cost per successful task, including human rework, escalations, wrong actions, and churn.
 
-### Prometheus
+## 11.4 Generality vs Product Fit
 
-Prometheus collects and queries time-series metrics.
+A general agent platform can support many workflows, but it may be harder to make any one workflow excellent. A product-specific system can be more reliable and easier to evaluate, but less reusable.
 
-Good for:
+In interviews, avoid overgeneralizing too early. Start with the product workflow, then extract shared platform components where duplication becomes real.
 
-* counters,
-* gauges,
-* histograms,
-* latency percentiles,
-* service health,
-* queue depth,
-* GPU utilization if exported.
+## 11.5 Freshness vs Stability
 
-### Grafana
+Fresh data improves relevance, but fresh indexes and prompts can introduce regressions.
 
-Grafana visualizes metrics and logs from multiple sources.
+Use ingestion pipelines with validation, document ownership, versioned indexes, and rollback. For sensitive domains, know which knowledge snapshot produced each answer.
 
-Mental model:
+## 11.6 Observability vs Privacy
 
-```text
-metrics source -> dashboard -> operational picture
-```
+Full traces help debugging. They can also store sensitive user data.
 
-Good dashboards answer a debugging question. They are not just charts.
-
-### Datadog-Style Platforms
-
-Hosted observability platforms combine metrics, traces, logs, dashboards, and alerts.
-
-Mental model:
-
-```text
-one operational surface for service behavior
-```
-
-Useful when teams need integrated incident debugging and do not want to run every observability component themselves.
-
-### Sentry
-
-Sentry focuses on application errors and exceptions.
-
-Good for:
-
-* stack traces,
-* error grouping,
-* release tracking,
-* user/session context.
-
-For AI systems, make sure sensitive prompts and retrieved content are redacted.
+Use redaction, scoped access, retention policies, and privacy-aware sampling. Store enough to debug behavior, not every raw token forever.
 
 ---
 
-## 11.12 Cloud, Containers, and Sandboxing Stack
+# 12. Failure Modes
 
-AI systems run inside infrastructure.
+## 12.1 Cascade Failures
 
-Mental model:
+A retrieval outage causes weak context. Weak context causes the model to call the wrong tool. The wrong tool fails. The agent retries. Retries overload the tool. Latency spikes and costs rise.
 
-```text
-code + dependencies
-  -> image
-  -> isolated runtime
-  -> scheduled workload
-  -> monitored execution
-```
+Containment:
 
-### Docker
+* health checks
+* circuit breakers
+* fallback answers
+* bounded retries
+* per-stage budgets
+* graceful degradation
 
-Docker packages code and dependencies into images.
+## 12.2 Silent Regressions
 
-Good for:
+A prompt, model, retrieval, or policy change makes answers subtly worse, but no exception is thrown.
 
-* reproducible services,
-* consistent worker environments,
-* deployment pipelines,
-* local/prod parity.
+Containment:
 
-Failure modes:
+* prompt and model versioning
+* offline regression evals
+* canary rollout
+* sampled human review
+* online quality metrics
+* trace comparison
 
-* huge images,
-* dependency drift,
-* missing GPU runtime configuration,
-* secrets baked into images,
-* slow cold starts.
+## 12.3 Retrieval Poisoning
 
-### Kubernetes
+Bad or malicious retrieved content steers the model.
 
-Kubernetes schedules and manages containers.
+Examples:
 
-It composes with:
+* stale policy doc
+* low-quality wiki page
+* user-injected instruction in a document
+* irrelevant but semantically similar ticket
+* document the user should not access
 
-* Docker/container images,
-* service meshes,
-* ingress controllers,
-* autoscalers,
-* GPU node pools,
-* observability agents,
-* config/secrets systems.
+Containment:
 
-For AI, Kubernetes is common for services and inference fleets, but research training may still use Slurm or specialized schedulers.
+* permission-aware retrieval
+* source ranking and trust scores
+* freshness metadata
+* instruction/data separation
+* citation checks
+* document owner review
 
-### AWS and GCP
+## 12.4 Cost Blowups
 
-Cloud platforms provide:
+The system accidentally sends too many long prompts, retries too often, or enters tool loops.
 
-* compute,
-* GPUs/TPUs,
-* object storage,
-* managed databases,
-* networking,
-* IAM,
-* logging,
-* managed Kubernetes,
-* warehouses.
+Containment:
 
-Mental model:
+* token budgets
+* request budgets
+* model routing
+* caching
+* loop limits
+* cost dashboards
+* per-tenant quotas
 
-```text
-managed building blocks + operational contracts + cost model
-```
+## 12.5 Unsafe Actions
 
-Interview focus:
+The system takes an action it should only have recommended.
 
-Do not list services. Explain how compute, storage, networking, identity, and observability compose.
+Containment:
 
-### VMs and Sandboxing
+* tool risk classification
+* policy engine
+* approval gates
+* idempotency keys
+* audit logs
+* reversible actions where possible
+* kill switch for write tools
 
-Agents that run code or use computers need isolation.
+## 12.6 Unclear Ownership
 
-Mental model:
+Failures fall between teams: model team blames retrieval, retrieval team blames docs, product team blames prompts, platform team blames tool owners.
 
-```text
-untrusted action -> isolated environment -> controlled outputs
-```
+Containment:
 
-Sandboxing protects:
+* clear service ownership
+* workflow owners
+* document owners
+* prompt owners
+* incident process
+* shared traces and dashboards
 
-* host filesystem,
-* network,
-* credentials,
-* other tenants,
-* production systems.
-
-Technologies and concepts:
-
-* VMs,
-* containers,
-* gVisor-style syscall isolation,
-* Firecracker-style microVMs,
-* seccomp,
-* network policies,
-* resource limits.
-
-The point is not the brand name. The point is the boundary.
+Ownership is a system design property. If no one owns the behavior, no one can improve it.
 
 ---
 
-## 11.13 Performance and Systems Languages
+# 13. What to Say in an Interview
 
-Python is the orchestration language for much of AI, but performance often comes from lower layers.
+A strong answer is structured, concrete, and operational.
 
-Mental model:
+## 13.1 General Design Template
 
-```text
-Python orchestration
-  -> native runtimes
-  -> kernels
-  -> hardware execution
-```
+Use this when asked to design any AI product.
 
-### CUDA
+1. Clarify the product workflow and success metric.
+2. Identify users, permissions, and risk level.
+3. Sketch the main architecture.
+4. Walk through one request lifecycle.
+5. Explain retrieval and memory.
+6. Explain tool orchestration and state.
+7. Explain safety gates and human review.
+8. Explain evals, monitoring, and rollout.
+9. Discuss tradeoffs and failure modes.
+10. State how the system improves over time.
 
-CUDA is NVIDIA's programming model for GPUs.
+This template works because it moves from product to architecture to operations.
 
-Mental model:
+## 13.2 High-Concurrency Serving Template
 
-```text
-many lightweight threads execute the same kernel over data in parallel
-```
+Use this when the question is about scaling an LLM API, handling a traffic spike, or keeping a RAG system alive when dependencies fail.
 
-The execution hierarchy is:
+"I would start at the boundary and move inward. Traffic enters through an API gateway that handles auth, request validation, tenant metadata, and coarse routing. Before any GPU work, I would enforce token-aware rate limits and admission control: requests per minute, tokens per minute, max context, max output, concurrency, and spend caps. Then I would cache safe repeated work such as embeddings, retrieval results, prompt prefixes, or deterministic responses. Requests that need inference go through a router/load balancer that understands active sequences, queue depth, KV-cache pressure, model version, and estimated token cost. Synchronous traffic gets strict latency budgets; document processing, batch summarization, evals, and backfills go through queues and worker pools. Circuit breakers isolate failing dependencies like vector stores or model providers, and fallbacks define whether to degrade, retry, or return a clear unavailable response. Autoscaling uses GPU-aware metrics and predictive schedules where traffic is predictable. Observability reports latency, queueing, token volume, cache hit rate, fallback rate, error rate, and cost by route and tenant."
 
-```text
-grid
-  -> blocks
-  -> warps
-  -> threads
-```
+This template works because it shows that production AI scaling is not just "add more GPUs." The system must control admission, avoid duplicate work, isolate failures, route variable-cost requests, and scale on the right metrics.
 
-* A **thread** executes one lane of work.
-* A **warp** is a group of threads that execute in lockstep on NVIDIA GPUs.
-* A **block** is a group of threads that can cooperate through shared memory.
-* A **grid** is the full set of blocks launched for a kernel.
+## 13.3 Enterprise Agent Platform Template
 
-This is why GPU code works best when the same operation is applied across many data elements with regular memory access. Branch-heavy or irregular workloads can underuse the hardware because different threads in the same warp want to do different things.
+"I would build a shared platform with an API gateway, auth layer, orchestration service, model gateway, tool registry, retrieval service, workflow engine, and observability/eval pipeline. Each agent would be a versioned configuration over prompts, tools, policies, model routes, and eval suites. I would enforce permissions at retrieval and tool execution, not just in the prompt. For rollout, I would use tenant flags, shadow mode, canaries, and rollback of prompts, models, and tool policies independently."
 
-You do not need to write CUDA for every role, but you should understand why GPU performance depends on:
+## 13.4 Coding Assistant Template
 
-* memory bandwidth,
-* kernel fusion,
-* occupancy,
-* communication,
-* data movement,
-* tensor shapes.
+"I would start with a context engine over the repository: symbols, files, recent edits, diagnostics, terminal output, and user intent. The assistant would produce patch-style edits, run tools in a sandbox, and keep traces of context, commands, and diffs. I would evaluate it using task completion, test pass rate, edit minimality, and unsafe command rate. The main tradeoff is context depth versus latency."
 
-Key performance intuition:
+## 13.5 Customer Support Automation Template
 
-```text
-slow path:
-  CPU loop calls many tiny GPU operations
+"I would separate grounded answer generation from action execution. Retrieval would pull policy docs, account data, and prior cases with provenance. The model would draft answers and recommend actions, while deterministic policy checks and human review gate refunds or account mutations. I would monitor resolution rate, reopen rate, escalation rate, policy violations, and cost per resolved ticket."
 
-better path:
-  one larger fused kernel does more work per launch
-```
+## 13.6 Research Copilot Template
 
-Kernel launches have overhead. CPU-GPU transfers have overhead. Moving data repeatedly between host memory and device memory can dominate runtime even when each individual operation is fast.
+"I would design around evidence provenance. Search and ingestion produce source objects with metadata. Retrieval and reranking select evidence. The model synthesizes with citations, and validation checks that claims are supported by retrieved sources. Feedback on source usefulness and claim correctness feeds evals and ranking improvements."
 
-For AI workloads, many optimizations come from:
+## 13.7 Workflow Automation Template
 
-* keeping tensors on the GPU,
-* fusing operations to reduce intermediate reads/writes,
-* choosing tensor shapes that hit efficient kernels,
-* increasing arithmetic intensity,
-* reducing synchronization points,
-* overlapping compute and communication when possible.
+"I would not run the whole workflow inside one agent loop. I would use a durable workflow engine with explicit steps, checkpoints, retries, idempotency keys, and approval states. The model helps interpret unstructured inputs and choose next steps, but deterministic code owns state transitions and high-risk action authorization."
 
-Interview framing:
+## 13.8 Debugging Template
 
-> I do not need to hand-write CUDA to reason about GPU performance. I would look for CPU-GPU transfers, many small kernel launches, poor tensor shapes, memory-bandwidth limits, and synchronization. The high-level fix is usually to batch, fuse, keep data resident, and use optimized kernels.
+When asked how to debug a production failure:
 
-### Triton Language
+1. Identify the failing user-visible behavior.
+2. Pull traces for bad and good examples.
+3. Compare request classification, retrieval, context assembly, model output, validation, tool calls, and final response.
+4. Locate the first divergence.
+5. Check whether it is a data, prompt, model, tool, policy, or orchestration issue.
+6. Add an eval case before changing the system.
+7. Roll out the fix behind a flag and monitor.
 
-Triton is a Python-like language for writing GPU kernels.
-
-Mental model:
-
-```text
-write custom tensor kernel -> compile to efficient GPU code
-```
-
-It is often used when framework operations are not efficient enough or when a new attention/MLP/kernel pattern needs optimization.
-
-Do not confuse Triton language with Triton Inference Server.
-
-### C++
-
-C++ is used for:
-
-* runtimes,
-* inference engines,
-* high-performance services,
-* native extensions,
-* kernels,
-* systems where latency and memory control matter.
-
-Mental model:
-
-```text
-manual control and performance at the cost of complexity
-```
-
-### Rust
-
-Rust is used when teams want systems-level performance with stronger memory safety.
-
-Good fits:
-
-* control-plane services,
-* sandboxes,
-* CLIs,
-* high-reliability infrastructure,
-* agents/tools that need safety boundaries.
-
-### OS Internals
-
-OS fundamentals matter for:
-
-* processes,
-* threads,
-* memory,
-* files,
-* sockets,
-* scheduling,
-* signals,
-* containers,
-* cgroups.
-
-Many AI infra bugs are OS bugs wearing ML clothing: file descriptor leaks, process zombies, memory pressure, slow disks, network timeouts, or bad scheduling.
+This is much stronger than saying "I would inspect logs."
 
 ---
 
-## 11.14 Agent and Tooling Stack
+# 14. Takeaways
 
-Agent systems compose models with state, tools, and control flow.
+Top-layer AI system design is composition under uncertainty.
 
-Mental model:
+The model is one component. The product behavior comes from context construction, retrieval, tool orchestration, state management, safety gates, eval loops, rollout controls, and observability.
 
-```text
-state
-  -> policy / model
-  -> tool or action
-  -> observation
-  -> state update
-  -> stop condition
-```
+The best design answers are operational. They explain who can do what, what data the model sees, how actions are approved, how failures are contained, how regressions are detected, and how the system improves.
 
-### LangGraph
+The examples directory includes both architecture walkthroughs and a small runnable request-pipeline sketch:
 
-LangGraph models agent workflows as graphs of state transitions.
+* [`examples/architecture_sketch.md`](examples/architecture_sketch.html)
+* [`examples/request_lifecycle.md`](examples/request_lifecycle.html)
+* [`examples/failure_debugging_walkthrough.md`](examples/failure_debugging_walkthrough.html)
+* [`examples/product_specific_design.md`](examples/product_specific_design.html)
+* [`examples/request_pipeline.py`](examples/request_pipeline.py)
 
-Good for:
+If you remember one sentence:
 
-* explicit state,
-* multi-step workflows,
-* branching,
-* controlled loops,
-* tool use.
-
-Mental model:
-
-```text
-stateful graph, not free-form chat
-```
-
-### Temporal
-
-Temporal is durable workflow orchestration.
-
-Good for:
-
-* long-running workflows,
-* retries,
-* durable state,
-* human approvals,
-* compensation logic,
-* exactly-once-ish business processes.
-
-Mental model:
-
-```text
-workflow state persists outside the worker process
-```
-
-Temporal solves reliability problems that prompts cannot solve.
-
-### MCP
-
-MCP standardizes how models and agents access tools and context.
-
-Mental model:
-
-```text
-agent client -> standardized server -> tools/resources/prompts
-```
-
-It matters because tool integration becomes more reusable when context and actions have a standard interface.
-
-### Sandboxed Code Execution
-
-Code agents need to run untrusted or model-generated code safely.
-
-Components:
-
-* isolated filesystem,
-* restricted network,
-* timeouts,
-* CPU/memory limits,
-* process cleanup,
-* audit logs,
-* artifact capture.
-
-This composes with containers, VMs, workflow engines, and evaluation environments.
+Design AI systems so uncertain reasoning is bounded by deterministic interfaces, permissioned data access, observable execution, and continuous evaluation.
 
 ---
 
-## 11.15 Stack Patterns by Role Type
+# 15. Bridge to Advanced Topics
 
-Different roles emphasize different combinations.
+Chapter 7 composes the previous layers into complete systems. The next layer asks how strong candidates differentiate beyond standard production design.
 
-### RL Infrastructure / Post-Training Engineer
+Advanced topics include synthetic data, simulation, verifier models, reasoning-time search, test-time compute, interpretability, and systems optimization. These techniques can improve quality, but they also change cost, evaluation, and operational risk.
 
-Core stack:
+The bridge is:
 
-```text
-PyTorch or JAX
-  -> Transformers / custom model code
-  -> rollout workers
-  -> reward model
-  -> PPO / DPO / RLHF trainer
-  -> distributed scheduler
-  -> checkpoint store
-  -> eval harness
-  -> W&B / MLflow
-  -> Prometheus / Grafana / OpenTelemetry
-```
+System design tells you where the bottleneck is. Advanced techniques give you additional levers once the ordinary architecture is already clear.
 
-What to know:
-
-* distributed training,
-* rollout throughput,
-* reward pipeline reliability,
-* checkpointing,
-* reproducibility,
-* GPU utilization,
-* debugging slowdowns after many steps.
-
-### Knowledge / Retrieval Engineer
-
-Core stack:
-
-```text
-document ingestion
-  -> parsing / chunking
-  -> embedding model
-  -> FAISS / pgvector / vector DB
-  -> Elasticsearch / OpenSearch
-  -> reranker
-  -> context builder
-  -> model API
-  -> RAG evals
-```
-
-What to know:
-
-* dense vs sparse retrieval,
-* metadata filtering,
-* access control,
-* ranking,
-* query understanding,
-* index freshness,
-* citation support,
-* knowledge graph tradeoffs.
-
-### Inference / Serving Engineer
-
-Core stack:
-
-```text
-FastAPI / gateway
-  -> auth / quota
-  -> router
-  -> Redis cache
-  -> queue / batcher
-  -> vLLM / TGI / Triton / Ray Serve
-  -> GPU workers
-  -> OpenTelemetry / Prometheus / Grafana
-```
-
-What to know:
-
-* prefill vs decode,
-* batching,
-* KV cache,
-* GPU memory,
-* streaming,
-* admission control,
-* cost per token,
-* fallback behavior.
-
-### Research Infrastructure Engineer
-
-Core stack:
-
-```text
-PyTorch / JAX
-  -> distributed training framework
-  -> Slurm / Kubernetes / Ray
-  -> object storage checkpoints
-  -> data pipeline
-  -> experiment tracker
-  -> observability
-```
-
-What to know:
-
-* researcher ergonomics,
-* reproducibility,
-* cluster utilization,
-* debugging distributed jobs,
-* data throughput,
-* checkpoint reliability,
-* performance profiling.
-
-### Agent Platform Engineer
-
-Core stack:
-
-```text
-model API
-  -> LangGraph / custom orchestrator
-  -> Temporal / durable workflow
-  -> MCP / tool registry
-  -> sandboxed execution
-  -> retrieval
-  -> eval harness
-  -> observability
-```
-
-What to know:
-
-* explicit state,
-* tool permissions,
-* idempotency,
-* durable workflows,
-* human approvals,
-* sandboxing,
-* trace-based debugging.
-
----
-
-# 12. Chapter Takeaways
-
-Software engineering fundamentals are not separate from applied AI. They are what make applied AI usable.
-
-Key ideas:
-
-* Python runtime behavior matters because AI payloads are large and services are long-running.
-* The GIL matters when choosing between threads, processes, async, and native code.
-* Async is powerful for IO-bound orchestration, but blocking the event loop can break the whole service.
-* Memory leaks usually come from reachable objects, unbounded caches, traces, tasks, or native allocations.
-* SQL performance depends on query plans, indexes, partitioning, materialization, and realistic data.
-* Distributed data systems trade simplicity for capacity and availability.
-* ML data pipelines need schema contracts, lineage, validation, backfills, and skew monitoring.
-* Scalable AI backends need separation between API orchestration and inference execution.
-* Tech stacks should be learned as abstractions and failure modes, not as brand-name checklists.
-* PyTorch, TensorFlow, and JAX differ mainly in execution and transformation mental models.
-* Distributed training, serving, retrieval, evals, and observability each have distinct stack layers that must compose cleanly.
-* Observability is not optional; it is how you debug probabilistic systems.
-
-Compact interview framing:
-
-> A production AI system is a normal distributed system with an unusually expensive, probabilistic core. I need to reason about Python runtime behavior, data systems, queues, caches, model calls, framework execution, distributed training, serving stacks, and observability together, because failures usually appear at the boundaries.
-
+[Chapter 13](../chapter_13/guide.html) adds the infrastructure depth behind system-design answers. For high-concurrency LLM APIs and agent platforms, do not stop at "scale horizontally." Explain token-aware routing, queueing, prefill/decode split, KV-cache pressure, long-context isolation, GPU pool placement, and autoscaling signals.

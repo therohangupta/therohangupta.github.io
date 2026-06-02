@@ -1,8 +1,9 @@
 ---
 layout: page
-title: "Evaluation Systems Practice Questions"
+title: "Chapter 4 Questions: Agents"
 guide_type: questions
 ---
+
 # Chapter 4 — Practice Questions
 
 Explanatory material for this chapter lives in [`guide.md`](guide.html).
@@ -15,228 +16,250 @@ Explanatory material for this chapter lives in [`guide.md`](guide.html).
 
 ## Question 1
 
-**How would you evaluate an LLM customer-support bot?**
+**What is an agent in an LLM product system?**
 
 ### Sample Answer
 
-I would start with the product goal: resolving user issues safely and accurately. I would measure task success, escalation rate, factuality against policy docs, refusal quality for unsupported requests, latency, cost per resolved ticket, and user satisfaction. I would use an offline golden set for common and high-risk cases, regression tests for past failures, human review for ambiguous cases, and online A/B tests to verify real user impact.
+An agent is a controlled loop that uses state, actions, observations, transitions, and stopping rules to make progress toward a goal. The LLM is usually the policy that chooses or helps choose actions, while the surrounding product system constrains tools, budgets, permissions, and execution.
 
 ---
 
 ## Question 2
 
-**Why is one aggregate eval score usually not enough?**
+**When would you use an agent instead of a single LLM call?**
 
 ### Sample Answer
 
-Because LLM failures are unevenly distributed. A system can improve on average while getting worse for long-context inputs, high-risk intents, non-English users, or tool-required workflows. I would report aggregate metrics, but also slice by task type, risk level, input length, user cohort, retrieval quality, and failure class.
+I would use an agent when the task requires multiple dependent steps, tool use, intermediate observations, or adaptation based on feedback. If the task is a simple text transformation with known inputs and outputs, a single call or deterministic workflow is cheaper, faster, and easier to evaluate.
 
 ---
 
 ## Question 3
 
-**What is the difference between offline and online evaluation?**
+**What are the core primitives of an agent loop?**
 
 ### Sample Answer
 
-Offline evaluation runs the system on a fixed dataset before deployment. It is repeatable and useful for regression testing, but may not match real user behavior. Online evaluation measures live user outcomes through A/B tests, canaries, satisfaction signals, task completion, and escalation rates. Offline evals catch many failures early; online evals validate real product impact.
+The core primitives are state, actions, observations, transitions, stopping rules, budgets, planning, and execution. State captures what the agent knows, actions define what it can do, observations report what happened, transitions update state, and stopping rules decide when the loop ends.
 
 ---
 
 ## Question 4
 
-**When is a metric worse than useless?**
+**Why is explicit state important in production agents?**
 
 ### Sample Answer
 
-A metric is worse than useless when optimizing it pushes the system away from user value. For example, measuring a support bot only by low escalation rate can reward the bot for refusing to hand off cases that need a human. Measuring answer length can reward verbosity instead of correctness. A bad metric does not merely fail to help; it creates the wrong incentives.
+Explicit state makes the agent inspectable, resumable, testable, and enforceable. If state only exists as prompt text, it is hard to validate whether the system respected constraints, used the right evidence, or should continue. Typed state also helps keep signal high and prevents context from becoming a noisy transcript.
 
 ---
 
 ## Question 5
 
-**How would you design a benchmark for a RAG system?**
+**What does "bounded action space" mean, and why does it matter?**
 
 ### Sample Answer
 
-I would include representative production questions, high-value workflows, known failures, unanswerable questions, ambiguous questions, and adversarial cases with distracting documents. Each case should include source documents, expected answer behavior, metadata tags, and a scoring method. I would measure answer correctness, groundedness, citation quality, refusal behavior, latency, and cost, then slice by retrieval quality and question type.
+A bounded action space means the agent can only choose from a defined set of permitted actions, usually exposed through typed tools or workflow transitions. It matters because unconstrained autonomy is hard to secure, test, and evaluate. The smaller and clearer the action space, the easier it is to reason about safety and correctness.
 
 ---
 
 ## Question 6
 
-**How do you evaluate factuality or hallucination rate?**
+**How would you design safe autonomy for an agent that can take side effects?**
 
 ### Sample Answer
 
-For grounded tasks, I would evaluate claims against the provided sources rather than against general world knowledge. A scoring pipeline could extract claims, check whether each claim is supported by retrieved documents, and use human or judge-model review for ambiguous cases. I would report unsupported-claim rate, answer-level hallucination rate, and examples of severe failures.
+I would tier tools by risk, use least-privilege permissions, require human approval for irreversible actions, add idempotency keys for side effects, enforce budgets, log every action, and validate plans before execution. Safe autonomy comes from product and systems constraints, not from asking the model to be careful.
 
 ---
 
 ## Question 7
 
-**When would exact match be a good metric, and when would it be bad?**
+**What is the ReAct pattern?**
 
 ### Sample Answer
 
-Exact match is good for canonical outputs such as classification labels, extracted fields, selected options, or numeric answers. It is bad for open-ended generation where many phrasings are correct. For summaries or helpful answers, exact match would penalize valid variation and miss deeper quality issues.
+ReAct alternates reasoning, action, and observation. The model thinks about what to do, calls a tool, observes the result, and repeats until it can answer or stop. It is useful for search and debugging tasks, but it needs step limits, tool validation, and observation checks because errors compound across the trajectory.
 
 ---
 
 ## Question 8
 
-**How would you evaluate an agent that uses tools?**
+**What is the tradeoff of planner/executor architectures?**
 
 ### Sample Answer
 
-I would evaluate both final task success and intermediate tool behavior. Metrics should include correct tool selection, valid tool arguments, tool success rate, error handling, unnecessary tool calls, final answer correctness, latency, and cost. Tracing is important because a fluent final answer can hide a wrong tool call or ignored tool failure.
+Planner/executor architectures expose intent before action, which makes plan validation, human review, and deterministic execution easier. The tradeoff is that plans can become stale or brittle when observations change. Good systems allow controlled replanning instead of blindly executing the original plan.
 
 ---
 
 ## Question 9
 
-**How do you detect regressions after changing a prompt?**
+**How do agent loops connect to Chapter 0 optimization and decision ideas?**
 
 ### Sample Answer
 
-I would run the candidate prompt against a baseline on a regression suite containing golden cases, past production failures, edge cases, and safety-sensitive examples. I would compare metrics by slice, inspect failures, and use hard gates for critical correctness and safety. I would also run online canaries if the offline result looks acceptable.
+An agent loop is a decision process under constraints. The model chooses actions based on state, receives observations, and updates its trajectory. Budgets, stopping rules, and validators shape the objective just like optimization constraints shape learning. The system is not maximizing open-ended helpfulness; it is optimizing task success under cost, latency, and safety limits.
 
 ---
 
 ## Question 10
 
-**What makes a good golden set?**
+**Why can a bad first step cause an agent to fail even if later steps look reasonable?**
 
 ### Sample Answer
 
-A good golden set is carefully labeled, representative of important workflows, includes edge cases and high-risk cases, has stable scoring rules, and is protected from overfitting or leakage. It should be small enough to maintain quality but broad enough to catch meaningful regressions.
+Because agent trajectories compound. A bad first search query, classification, or plan can put the agent in the wrong part of the state space. Later decisions may be locally consistent with bad evidence but globally wrong. This is why plan validation, clarification, and early evidence checks are important.
 
 ---
 
 ## Question 11
 
-**What is eval leakage?**
+**How would you prevent an agent from looping forever?**
 
 ### Sample Answer
 
-Eval leakage happens when test answers or test patterns influence the system being evaluated. Examples include training on eval data, putting golden examples into the prompt, retrieving expected answers from a vector store, or manually special-casing benchmark cases. Leakage makes scores untrustworthy because the eval no longer measures generalization.
+I would enforce max steps, retry caps, token and cost budgets, repeated-state detection, and explicit terminal states such as completed, needs human input, budget exhausted, or unable to complete. I would also log stop reasons so failures can be diagnosed.
 
 ---
 
 ## Question 12
 
-**How reliable are LLM judge models?**
+**Why is idempotency important for agents?**
 
 ### Sample Answer
 
-Judge models are useful but imperfect. They can prefer verbose answers, confident style, familiar model outputs, or safe-sounding responses. I would calibrate judges against human labels, use clear rubrics, randomize answer order for pairwise comparisons, track judge versions, inspect disagreements, and prefer deterministic validators when possible.
+Agents retry, resume, and may receive duplicate events from queues. Without idempotency, side effects can be duplicated: sending the same email twice, creating duplicate tickets, or charging a customer twice. Idempotency keys, dedupe records, and transactional checks make retries safe.
 
 ---
 
 ## Question 13
 
-**How would you evaluate refusal quality?**
+**When should agent steps be parallelized?**
 
 ### Sample Answer
 
-I would measure both under-refusal and over-refusal. Under-refusal means the system answers unsafe or unsupported requests. Over-refusal means it refuses benign requests. A good refusal should identify the boundary, avoid harmful content, and offer safe alternatives when possible. The eval set should include unsafe, borderline, and clearly benign cases.
+Parallelize steps when they are independent, such as searching multiple sources, processing separate documents, or generating alternative plans. Keep steps sequential when each decision depends on the previous observation or when actions have side effects. A good rule is: parallelize independent uncertainty reduction; serialize dependent decisions and writes.
 
 ---
 
 ## Question 14
 
-**Why do confidence intervals or uncertainty matter in evals?**
+**What is human-in-the-loop, and when should it be used?**
 
 ### Sample Answer
 
-Metrics are estimates from samples. If a pass rate moves from 84% to 85% on a small dataset, that may just be noise. Confidence intervals and repeated runs help determine whether a change is meaningful. They are especially important for sliced metrics because each slice may have fewer examples.
+Human-in-the-loop means the system pauses for human judgment, approval, or clarification. It should be used when confidence is low, intent is ambiguous, cost is high, policy requires review, or the next action is irreversible. It is a control boundary, not a failure of automation.
 
 ---
 
 ## Question 15
 
-**How would you use synthetic evals safely?**
+**How would you choose between a guided workflow and an autonomous agent?**
 
 ### Sample Answer
 
-I would use synthetic evals to expand coverage around known patterns, rare failures, privacy-sensitive cases, or adversarial variants. I would not trust them blindly. I would review samples, mix them with real production cases, track their source, and check whether improvements on synthetic cases correlate with real-world outcomes.
+I would use a guided workflow when the product path is known, correctness matters, or compliance and predictability are important. I would use more autonomy when the task is open-ended and the correct path depends on observations. In many products, the best design is a guided workflow with bounded agentic substeps.
 
 ---
 
 ## Question 16
 
-**How do you evaluate robustness?**
+**What are common failure modes of production agents?**
 
 ### Sample Answer
 
-I would perturb inputs and measure whether behavior stays stable. Perturbations could include paraphrases, irrelevant context, different document order, longer inputs, missing fields, tool errors, and repeated stochastic runs. Robustness is about variance, not just average correctness.
+Common failure modes include bad first-step cascades, trajectory collapse, tool feedback loops, runaway costs, duplicated side effects, memory drift, infinite loops, and over-autonomy. Most of these come from compounding errors across steps, so containment and observability are central to the design.
 
 ---
 
 ## Question 17
 
-**How would you choose between human evaluation and automated evaluation?**
+**How would you evaluate whether an agent is working well?**
 
 ### Sample Answer
 
-I would use automated checks for exact outputs, schema validity, known failure patterns, and broad regression coverage. I would use human evaluation for subjective quality, expert factuality, policy interpretation, and judge calibration. The best eval systems combine automation for scale with human review for nuance.
+I would evaluate both the final output and the trajectory. That means measuring task success, tool choice quality, evidence use, budget adherence, stop reasons, safety policy compliance, and recovery from failures. For agents, a fluent final answer is not enough if the path was unsafe or expensive.
 
 ---
 
 ## Question 18
 
-**What should be included in an evaluation report before shipping a model change?**
+**What role do frameworks like LangGraph, AutoGen, CrewAI, MCP, and DSPy play?**
 
 ### Sample Answer
 
-It should compare candidate versus baseline, show primary and guardrail metrics, include slice breakdowns, report uncertainty where relevant, list representative failures, show latency and cost changes, identify safety or correctness regressions, and make a clear ship, canary, rollback, or block recommendation.
+They provide different abstractions around orchestration, tools, multi-agent coordination, and optimization. LangGraph helps model workflows as graphs of state transitions. MCP standardizes tool and context access. AutoGen and CrewAI help prototype multi-agent patterns. DSPy helps optimize LLM modules. None of them removes the need for state design, permissions, evaluation, and operational controls.
 
 ---
 
 ## Question 19
 
-**Why might user satisfaction be a misleading metric?**
+**How would you explain safe tool use in an interview?**
 
 ### Sample Answer
 
-Users may reward confident, fluent answers even when they are wrong. They may also dislike correct refusals or safe boundaries. Satisfaction is valuable as a product signal, but it should be paired with factuality, task success, safety, and escalation metrics.
+I would say tools should be exposed as typed, permissioned actions with validation around inputs and outputs. Read-only tools can be broadly available, while write or irreversible tools need approval, audit logs, idempotency, and stricter limits. The goal is to give the model useful capabilities without giving it unbounded authority.
 
 ---
 
 ## Question 20
 
-**How do evaluation systems connect to learning loops?**
+**What is the relationship between agent memory and memory drift?**
 
 ### Sample Answer
 
-Evaluation produces the signal used to improve the system. Failed examples become regression tests, labeled examples become training or preference data, online outcomes identify valuable cases, and human review clarifies policy. Without reliable evals, a learning loop may optimize noise or amplify bad incentives.
+Agent memory can improve continuity by preserving useful facts, preferences, and prior observations. But memory drift happens when stale, wrong, or low-confidence information gets reused as if it were true. To reduce drift, memory should have provenance, confidence, expiration, and clear separation between facts, preferences, and summaries.
 
 ---
 
 ## Question 21
 
-**Design exercise: how would you evaluate an AI support agent before launch?**
+**How do you prevent one failing agent run from consuming all system resources?**
 
 ### Sample Answer
 
-I would build an eval set from real support intents, historical escalations, policy-sensitive cases, adversarial prompts, and unanswerable requests. I would score task success, factuality, groundedness, citation quality, tool correctness, escalation behavior, latency, and cost. The release gate should compare against a baseline by slice, require no regressions on safety or policy cases, and include human review for representative failures.
+Give every run explicit budgets: max tool calls, max tokens, max wall-clock time, max retries, and max parallel branches. Use queue limits, cancellation, rate limits, and circuit breakers around external tools. The orchestrator should mark the run as failed or escalated when budgets are exhausted rather than allowing open-ended loops.
 
 ---
 
 ## Question 22
 
-**Production debugging: an eval dashboard improved, but users report worse answers. What would you investigate?**
+**What changes when agents run asynchronously or in distributed workers?**
 
 ### Sample Answer
 
-I would check whether the eval set matches current traffic, whether aggregate gains hide slice regressions, whether synthetic cases overweight easy patterns, whether the judge model rewards style over correctness, and whether online traffic has retrieval, latency, or tool failures not represented offline. I would inspect traces from bad user reports and add those cases to the regression suite.
+State must become durable and resumable. A single in-memory loop is not enough because workers can crash, retries can duplicate actions, and tool calls may finish out of order. Distributed agents need workflow IDs, checkpoints, idempotency keys, leases or locks, cancellation, and clear ownership of each step.
 
 ---
 
 ## Question 23
 
-**What are ROC-AUC's limitations on imbalanced datasets?**
+**Why is scheduling important for production agent systems?**
 
 ### Sample Answer
 
-ROC-AUC measures how well positives are ranked above negatives across thresholds, but it can look strong even when performance on the rare class is poor. On highly imbalanced datasets, the false positive rate can stay small simply because there are many negatives, while the absolute number of false positives is still too large for the product. Precision-recall curves, precision at k, recall at an operating threshold, calibration, and cost-sensitive metrics are often more informative for rare-event problems.
+Agent runs can vary wildly in cost. Some finish after one tool call; others trigger long retrieval, multiple model calls, and slow external APIs. Scheduling prevents expensive runs from starving short ones. A good system separates queues by priority, risk, customer tier, expected cost, or tool type and enforces fairness and resource limits.
+
+---
+
+## Question 24
+
+**How would you handle a tool call that takes longer than expected inside an agent loop?**
+
+### Sample Answer
+
+The tool call should have a timeout and cancellation policy. If it times out, the agent should record the failure as an observation, decide whether a retry is safe, and avoid repeating non-idempotent actions. For high-value workflows, the system may continue with partial results or escalate. The important point is that the model should not wait forever or invent the missing tool result.
+
+---
+
+## Question 25
+
+**Why are partial results useful in distributed agent execution?**
+
+### Sample Answer
+
+Partial results let the system recover from failures and avoid losing work. If retrieval succeeded but a downstream tool failed, the system can resume from the last checkpoint instead of restarting the whole trajectory. Partial results also support human review, debugging, and cost control because engineers can see which step failed and why.
+
+---

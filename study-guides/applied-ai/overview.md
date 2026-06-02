@@ -3,253 +3,160 @@ layout: page
 title: "Applied AI Study Guide"
 guide_type: overview
 ---
-# Study guide overview
+# Applied AI Study Guide
 
-This is a compositional map: topics build upward into the kind of systems companies likely care about—not a flat topic list.
+This guide is a complete learning path for applied AI and ML systems work. The chapters are ordered to build from primitives, to LLM components, to retrieval and agents, to evaluation and learning, to production/security/system design, and finally to software, platform, and ML systems depth.
 
-## Table of contents
-
-1. [Study guide map (four layers)](#1-study-guide-map-four-layers)
-2. [Chapter 0: Foundations and LLM fundamentals](#2-chapter-0-foundations-and-llm-fundamentals)
-3. [Chapter 1: LLM engineering (making them useful)](#3-chapter-1-llm-engineering-making-them-useful)
-4. [Chapter 2: Retrieval and memory systems](#4-chapter-2-retrieval-and-memory-systems)
-5. [Chapter 3: Agents (core product layer)](#5-chapter-3-agents-core-product-layer)
-6. [Chapter 4: Evaluation systems](#6-chapter-4-evaluation-systems)
-7. [Chapter 5: Learning loops (RL and continual learning)](#7-chapter-5-learning-loops-rl-and-continual-learning)
-8. [Chapter 6: Production ML systems](#8-chapter-6-production-ml-systems)
-9. [Chapter 7: System design (top layer)](#9-chapter-7-system-design-top-layer)
-10. [Chapter 8: Advanced and differentiation topics](#10-chapter-8-advanced-and-differentiation-topics)
-11. [Chapter 9: Software engineering fundamentals for AI systems](#11-chapter-9-software-engineering-fundamentals-for-ai-systems)
-12. [How everything connects](#12-how-everything-connects)
-13. [Priority order (what to study first)](#13-priority-order-what-to-study-first)
+Every chapter has a comprehensive `guide.md`, `questions.md`, `examples.md`, and `examples/` directory.
 
 ---
 
-## 1. Study guide map (four layers)
+## Table of Contents
 
-Read the guide bottom-up, toward full systems:
-
-| Layer | Focus |
-| ----- | ----- |
-| **Layer 0** | Foundations (primitives) |
-| **Layer 1** | ML + LLM building blocks |
-| **Layer 2** | System components (agents, memory, retrieval) |
-| **Layer 3** | Full production systems (design, scaling, learning loops) |
+1. [Study Guide Map](#1-study-guide-map)
+2. [Chapter Overview](#2-chapter-overview)
+3. [How Everything Connects](#3-how-everything-connects)
+4. [Capstone Scenarios](#4-capstone-scenarios)
+5. [Learning Paths](#5-learning-paths)
+6. [How to Study a Chapter](#6-how-to-study-a-chapter)
 
 ---
 
-## 2. Chapter 0: Foundations and LLM fundamentals
+## 1. Study Guide Map
 
-[`chapters/chapter_0/guide.md`](chapters/chapter_0/guide.html)
-
-### Part I — Foundations (atomic thinking layer)
-
-Irreducible primitives everything else builds on:
-
-- Probability and distributions (intuitive, not academic)
-- Optimization: loss, gradients, convergence intuition
-- Representations: embeddings as geometry
-- Information flow: compression; signal vs noise
-- Composition (RAG and agent examples tying the four primitives together)
-- ML design primitives (representation, parameterization, objectives, constraints, credit assignment) and example decompositions (Transformer, PPO, diffusion)
-- Practice questions and takeaways for this layer
-
-**Why it matters:** Every LLM, RAG, and RL idea reduces to what is represented, what signal is optimized, and what information is preserved or lost.
-
-### Part II — LLM fundamentals (core engine)
-
-How decoder-style LLMs are built, trained, and served:
-
-- **Core stack:** tokens, embeddings, positional handling, self-attention, FFN blocks, residuals, normalization
-- **Why transformers won:** parallelism, long-range dependencies, scalable depth
-- **Architecture progression:** stable blocks (pre-norm, RMSNorm, RoPE, SwiGLU), MHA / MQA / GQA / MLA, sparse and sliding-window attention, MoE, FlashAttention and paged KV
-- **Training pipeline:** pretraining → SFT → preference / RL alignment
-- **Inference and cost:** prefill vs decode, KV cache, memory bandwidth, how each design choice hits latency and throughput
-- **Interview framing:** tradeoff cheat sheet, “what to say,” practice questions, takeaways
+| Layer | Chapters | Focus |
+| ----- | -------- | ----- |
+| Foundations | 0-1 | ML primitives and LLM architecture |
+| Product Components | 2-4 | LLM engineering, retrieval/memory, agents |
+| Measurement and Improvement | 5-6 | Evaluation systems and learning loops |
+| Production and Composition | 7-10 | Serving, security, system design, advanced AI techniques |
+| Engineering Depth | 11-13 | Software fundamentals, platform stack, ML systems/inference engineering |
+| Capstones | Capstone scenarios | Full-system interview practice |
 
 ---
 
-## 3. Chapter 1: LLM engineering (making them useful)
+## 2. Chapter Overview
 
-### What this chapter covers
+### Chapter 0: ML Foundations
 
-**Primitives**
+[`chapters/chapter_0/guide.md`](chapters/chapter_0/guide.html)  
+Owns probability, optimization, embeddings, information flow, objectives, constraints, and the primitives that all later chapters reuse.
 
-- Prompting; temperature and sampling; context construction; tool calling; structured outputs
+### Chapter 1: LLM Architecture and Inference Fundamentals
 
-**Composition**
+[`chapters/chapter_1/guide.md`](chapters/chapter_1/guide.html)  
+Owns tokens, embeddings, transformer blocks, attention, MHA/MQA/GQA/MLA, MoE, prefill/decode basics, KV cache, and architecture/cost tradeoffs.
 
-- Prompt pipelines; tool-augmented LLMs; mixing deterministic and stochastic control
+### Chapter 2: LLM Engineering
 
-**Outcomes**
+[`chapters/chapter_2/guide.md`](chapters/chapter_2/guide.html)  
+Owns prompting, structured outputs, tool calling, context construction, orchestration, retries, fallbacks, and runtime control.
 
-- Real workflows; controlled behavior; more reliable outputs
+### Chapter 3: Retrieval and Memory Systems
 
----
+[`chapters/chapter_3/guide.md`](chapters/chapter_3/guide.html)  
+Owns RAG, chunking, embeddings, hybrid search, reranking, citations, memory, indexing, sharding, freshness, and retrieval observability.
 
-## 4. Chapter 2: Retrieval and memory systems
+### Chapter 4: Agents
 
-### What this chapter covers
+[`chapters/chapter_4/guide.md`](chapters/chapter_4/guide.html)  
+Owns state, actions, observations, loops, planners, executors, workflow graphs, budgets, approval, sandboxing, and agent failure modes.
 
-**Primitives**
+### Chapter 5: Evaluation Systems
 
-- Embeddings as vectors; similarity search; chunking; indexing; metadata filtering
+[`chapters/chapter_5/guide.md`](chapters/chapter_5/guide.html)  
+Owns metrics, golden sets, judge models, human review, uncertainty, slicing, regression tests, online experiments, canaries, and release gates.
 
-**Composition**
+### Chapter 6: Learning Loops
 
-- RAG pipelines; long-term memory; context management systems
+[`chapters/chapter_6/guide.md`](chapters/chapter_6/guide.html)  
+Owns SFT, DPO, RLHF, PEFT, distillation, feedback systems, data eligibility, update gates, lineage, quarantine, canaries, and rollback.
 
-**Extensions**
+### Chapter 7: Production ML Systems
 
-- Episodic vs semantic memory; summarization; memory compression; forgetting strategies
+[`chapters/chapter_7/guide.md`](chapters/chapter_7/guide.html)  
+Owns serving architecture, queues, caches, routing, deployment, monitoring, incident response, reliability, latency, throughput, and cost.
 
----
+### Chapter 8: Security, Privacy, and Trust Boundaries
 
-## 5. Chapter 3: Agents (core product layer)
+[`chapters/chapter_8/guide.md`](chapters/chapter_8/guide.html)  
+Owns prompt injection, trusted/untrusted context, ACL-aware retrieval, tool authorization, audit logs, PII, model-provider boundaries, supply-chain risk, and incident response.
 
-Where the stack starts to look like what they build.
+### Chapter 9: AI System Design
 
-### What this chapter covers
+[`chapters/chapter_9/guide.md`](chapters/chapter_9/guide.html)  
+Owns full-system design templates that compose LLMs, retrieval, agents, evals, learning, production, security, rollout, and failure containment.
 
-**Primitives**
+### Chapter 10: Advanced AI Techniques
 
-- State; actions (tools); observations; the loop (control / robotics framing)
+[`chapters/chapter_10/guide.md`](chapters/chapter_10/guide.html)  
+Owns synthetic data, simulation, verifiers, reasoning/search, test-time compute, interpretability, advanced distillation, and frontier-style tradeoffs.
 
-**Composition**
+### Chapter 11: Software Engineering Fundamentals for AI Systems
 
-- Agent loop; planner + executor; reflection and self-correction; multi-agent systems
+[`chapters/chapter_11/guide.md`](chapters/chapter_11/guide.html)  
+Owns Python runtime behavior, async, multiprocessing, APIs, queues, SQL, data pipelines, backend service design, reliability, and ordinary software failure modes.
 
-**Key idea**
+### Chapter 12: AI Platform and Infrastructure Stack
 
-Agents = LLM + tools + memory + loop.
+[`chapters/chapter_12/guide.md`](chapters/chapter_12/guide.html)  
+Owns PyTorch/JAX/TensorFlow mental models, distributed training libraries, serving stacks, Ray, Kubernetes, data/retrieval/eval stacks, registries, artifact lineage, and observability platforms.
 
----
+### Chapter 13: ML Systems and Inference Engineering
 
-## 6. Chapter 4: Evaluation systems
-
-Most candidates skip this; startups at this stage usually do not.
-
-### What this chapter covers
-
-**Primitives**
-
-- Metrics; ground truth; signal vs noise; distributions of outcomes
-
-**Composition**
-
-- Offline and online evals; regression testing; adversarial testing; synthetic eval generation
-
-**Key idea**
-
-If you cannot measure it, you cannot improve it.
+[`chapters/chapter_13/guide.md`](chapters/chapter_13/guide.html)  
+Owns GPU execution, CUDA/PyTorch runtime behavior, compiler/runtime optimization, LLM inference internals, distributed serving/training, capacity planning, and debugging playbooks.
 
 ---
 
-## 7. Chapter 5: Learning loops (RL and continual learning)
+## 3. How Everything Connects
 
-### What this chapter covers
+```text
+ML primitives
+  -> LLM architecture
+  -> prompting / tools / context control
+  -> retrieval + memory
+  -> agents
+  -> evaluation
+  -> learning loops
+  -> production serving
+  -> security boundaries
+  -> full system design
+  -> advanced AI levers
+  -> software fundamentals
+  -> platform stack
+  -> ML systems and inference engineering
+  -> capstones
+```
 
-**Primitives**
+Compact form:
 
-- Reward; policy; feedback; exploration vs exploitation
-
-**Composition**
-
-- SFT (supervised fine-tuning); RLHF; DPO; online learning systems; continual learning pipelines
-
-**Key idea**
-
-Turn real-world usage into model improvement.
-
----
-
-## 8. Chapter 6: Production ML systems
-
-### What this chapter covers
-
-**Primitives**
-
-- Latency; throughput; cost; failure modes
-
-**Composition**
-
-- Inference services; batching and caching; async pipelines; distributed workers; observability
-
-**Key idea**
-
-Making things work reliably at scale.
+```text
+LLM + retrieval + memory + tools + loop + evals + feedback + security + serving + software + platform + ML systems = applied AI system
+```
 
 ---
 
-## 9. Chapter 7: System design (top layer)
+## 4. Capstone Scenarios
 
-Final composition: combine prior chapters into full systems.
+[`capstones/overview.md`](capstones/overview.html)
 
-### What this chapter covers
-
-**Example systems**
-
-- Enterprise AI agent platform; coding assistant; customer support automation; research copilots; workflow automation agents
-
-**What you will reason about**
-
-- Architecture; tradeoffs; scaling; safety; iteration loops
+Capstones are full-system drills. They train you to compose the chapters under realistic constraints: security, latency, cost, evals, rollout, learning loops, software systems, and inference capacity.
 
 ---
 
-## 10. Chapter 8: Advanced and differentiation topics
+## 5. Learning Paths
 
-Signal boosters for strong candidates.
+[`learning_paths.md`](learning_paths.html)
 
-### What this chapter covers
-
-- Synthetic data generation
-- Simulation environments
-- Reasoning models (chain-of-thought, verifiers)
-- Test-time compute
-- Mechanistic interpretability (light touch)
-- GPU and system-level optimization intuition
+The learning paths page gives sequencing for AI product engineering, agent platforms, AI infrastructure, post-training systems, security-focused work, and interview sprints. These are study orders, not optional tracks.
 
 ---
 
-## 11. Chapter 9: Software engineering fundamentals for AI systems
+## 6. How to Study a Chapter
 
-The engineering layer underneath production AI.
-
-### What this chapter covers
-
-- Python runtime behavior, memory management, the GIL, async, multiprocessing, decorators, and metaclasses
-- SQL optimization, indexing, partitioning, sharding, materialized views, and distributed data tradeoffs
-- Data pipelines, streaming systems, schema validation, and training-serving skew
-- Scalable Python backends for AI inference
-- Tech-stack mental models: PyTorch, TensorFlow, JAX, Transformers, DeepSpeed, FSDP, Ray, Gym, TRL-style workflows
-- Serving and infrastructure stacks: vLLM, TGI, Triton, Kubernetes, Slurm, Docker, Redis, queues
-- Data, retrieval, and observability stacks: Spark, Beam, Dask, Kafka, FAISS, pgvector, vector databases, OpenTelemetry, Prometheus, Grafana, W&B, MLflow
-
----
-
-## 12. How everything connects
-
-**Compositional chain**
-
-- Embeddings → retrieval → memory
-- LLM → reasoning → tool use
-- Memory + tools + loop → agent
-- Agent + feedback → learning loop (RL)
-- Everything + infra + software fundamentals → production system
-
-**Compact form**
-
-LLM + retrieval + memory + tools + loop + feedback + infra + software engineering = applied AI system—the kind of system Applied Compute is building.
-
----
-
-## 13. Priority order (what to study first)
-
-If you are time-constrained:
-
-| Tier | Priority | Topics |
-| ---- | -------- | ------ |
-| **1 — Must master** | Highest | Chapter 0; LLM engineering (prompting, tools); retrieval + memory; agents; evaluation |
-| **2 — Very important** | High | Learning loops (RLHF, continual learning); production systems; software engineering fundamentals |
-| **3 — Nice to have** | Lower | Advanced topics (Chapter 8) |
+1. Read `guide.md` for the mental model.
+2. Answer `questions.md` aloud.
+3. Inspect or run the examples from `examples.md`.
+4. Connect the chapter to at least one capstone.
+5. Revisit earlier chapters when a later chapter reuses their primitives.

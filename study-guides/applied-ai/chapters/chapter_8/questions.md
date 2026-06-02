@@ -1,11 +1,12 @@
 ---
 layout: page
-title: "Advanced and Differentiation Topics Practice Questions"
+title: "Chapter 8 Questions: Security, Privacy, and Trust Boundaries"
 guide_type: questions
 ---
+
 # Chapter 8 — Practice Questions
 
-Explanatory material for this chapter lives in `guide.md`.
+Explanatory material for this chapter lives in [`guide.md`](guide.html).
 
 ---
 
@@ -15,260 +16,220 @@ Explanatory material for this chapter lives in `guide.md`.
 
 ## Question 1
 
-**When does synthetic data help a model or AI system?**
+**What is the core security problem in AI systems?**
 
 ### Sample Answer
 
-Synthetic data helps when it targets a known coverage gap and the labels or expected outputs can be verified. Good examples include rare edge cases, adversarial prompts, structured-output formats, tool-use traces, or domain variants that are underrepresented in real data. I would not use synthetic data just to increase volume; I would measure whether it improves performance on a held-out real evaluation set.
+The core problem is that untrusted text can influence trusted computation. A model may read user messages, retrieved documents, webpages, emails, tool outputs, or memory entries that contain instructions. The system must separate trusted instructions from untrusted evidence and ensure model output does not become authorization.
 
 ---
 
 ## Question 2
 
-**When can synthetic data hurt?**
+**Why should the model not be the permission boundary?**
 
 ### Sample Answer
 
-It can hurt when the generated examples are too clean, repetitive, biased toward the teacher model, incorrectly labeled, or overrepresented relative to real data. The model may learn artifacts of the generator instead of the real task. In the worst case, repeated training on generated data can cause synthetic data collapse, where the distribution becomes narrower and less grounded.
+The model is probabilistic and can be manipulated by prompt injection, misleading context, or tool-output text. It can propose an action, but policy code should decide whether the authenticated user, tenant, role, resource, action, and risk level allow that action.
 
 ---
 
 ## Question 3
 
-**How would you design a synthetic data pipeline for a production LLM feature?**
+**How do you defend an agent against prompt injection from retrieved documents?**
 
 ### Sample Answer
 
-I would start from real failure cases or known sparse categories, define the target coverage, generate examples with a strong model or templates, validate format and labels, deduplicate, filter low-quality examples, review a sample manually, and version the dataset. Then I would tune the synthetic-to-real mix and evaluate on held-out real data before shipping.
+Treat retrieved documents as untrusted evidence, not instructions. Enforce permissions before retrieval, label retrieved content as evidence, minimize context, prevent retrieved text from changing tool permissions or system policy, validate model outputs with policy code, and include adversarial prompt-injection cases in evals.
 
 ---
 
 ## Question 4
 
-**What is a verifier model, and why is it useful?**
+**What is indirect prompt injection?**
 
 ### Sample Answer
 
-A verifier is a separate scoring or validation component that judges candidate outputs. It is useful because generation and judgment can be separated: the generator proposes answers, while the verifier filters, reranks, or rejects them. Verifiers are strongest when checking is easier than generation, such as running tests for code, validating JSON schemas, checking citations, or executing SQL against a fixture.
+Indirect prompt injection occurs when adversarial instructions are hidden in content the user did not directly write, such as webpages, emails, tickets, PDFs, code comments, or retrieved documents. The model reads the content and may follow the attacker's instructions unless the system treats that content as untrusted.
 
 ---
 
 ## Question 5
 
-**What is the risk of using another LLM as a verifier?**
+**How do you design permission-aware retrieval for enterprise users?**
 
 ### Sample Answer
 
-An LLM verifier may share the same blind spots as the generator. It can also be poorly calibrated, prefer fluent answers over correct ones, or create false confidence. I would use deterministic checks where possible, evaluate the verifier separately, calibrate thresholds, and combine it with human review or domain-specific checks for high-risk tasks.
+Identify the user, tenant, groups, and document permissions before retrieval. Filter candidate documents by ACL before ranking and context assembly. Store permission metadata at document or chunk level, sync deletions and permission changes from the source of truth, and test for cross-tenant leakage.
 
 ---
 
 ## Question 6
 
-**How does test-time compute improve quality?**
+**Why should ACL filtering happen before ranking or generation?**
 
 ### Sample Answer
 
-Test-time compute improves quality by spending more inference work on candidate generation, reasoning, search, tool use, critique, or verification. Instead of taking the first answer, the system can sample multiple candidates, explore plans, validate intermediate steps, and select the best output. The tradeoff is higher latency, higher cost, and more complex orchestration.
+If unauthorized chunks are retrieved and ranked before filtering, private information can influence the model or appear in logs and traces even if the final answer is filtered. Access control must happen before the model sees the content.
 
 ---
 
 ## Question 7
 
-**How would you prevent test-time search from becoming too expensive?**
+**What is a confused deputy attack in an LLM agent?**
 
 ### Sample Answer
 
-I would set explicit budgets: maximum depth, number of candidates, token budget, timeout, verifier calls, and retry count. I would also use early stopping, adaptive routing, cheap first-pass verifiers, branch pruning, caching, and escalation only for high-value or uncertain requests.
+A confused deputy attack happens when an attacker uses untrusted text to trick a more-privileged component into acting with its authority. In an LLM agent, a malicious document might instruct the model to call an internal tool with system credentials. The fix is to authorize tool calls against the real user, tenant, resource, and action, not the model's interpretation.
 
 ---
 
 ## Question 8
 
-**What is tree-of-thought style reasoning?**
+**How do you prevent a model from exfiltrating secrets through tools?**
 
 ### Sample Answer
 
-Tree-of-thought reasoning treats problem solving as search over intermediate reasoning states. The system generates several possible next steps, scores them, keeps promising branches, expands those branches, and stops when a solution passes a verifier or the budget runs out. It can help on planning and puzzle-like tasks, but it is often unnecessary for simple extraction or formatting tasks.
+Do not expose secrets unless needed, run tools with least privilege, restrict outbound destinations, validate tool arguments, classify high-risk actions, require approval for sensitive transfers, redact logs, and monitor unusual tool-call patterns. The model should not have direct access to broad credentials.
 
 ---
 
 ## Question 9
 
-**Should you trust a model's chain-of-thought explanation?**
+**What should be in an audit log for a tool-using agent?**
 
 ### Sample Answer
 
-No, not by itself. Chain-of-thought can improve performance, but the explanation is not guaranteed to be faithful or correct. A model can rationalize a wrong answer. In production, I would verify final claims with tools, citations, tests, schema checks, or domain-specific validators rather than trusting reasoning prose.
+An audit log should include trace ID, user, tenant, model version, prompt version, retrieved sources, tool name, tool arguments, authorization decision, policy version, human approver if any, result, timestamp, and error or rollback information.
 
 ---
 
 ## Question 10
 
-**What is the practical value of mechanistic interpretability for an engineer?**
+**How should human approval work for high-risk agent actions?**
 
 ### Sample Answer
 
-Its practical value is debugging and hypothesis generation. Tools like activation inspection, attention visualization, probing, or sparse autoencoder features can suggest what the model may be sensitive to. But interpretability evidence is not a correctness guarantee. I would pair it with behavioral evaluation and production monitoring.
+The approval should be for a specific proposed action, not a vague plan. The reviewer should see the user request, target resource, action, reason, evidence, risk class, model version, and rollback path. The approval system should be outside the model.
 
 ---
 
 ## Question 11
 
-**How would you explain prefill versus decode latency?**
+**How do you handle memory deletion and user opt-out?**
 
 ### Sample Answer
 
-Prefill is the phase where the model processes the input prompt. It is often compute-heavy because many prompt tokens can be processed in parallel. Decode is the phase where the model generates output tokens one at a time. Decode is often memory-bandwidth-heavy because each generated token requires reading model weights and KV cache state.
+Track where memory-derived data may exist: memory store, vector index, embeddings, traces, logs, eval datasets, training datasets, and backups. Respect opt-out before writing memory, scope memories by user or tenant, and maintain lineage so deletion requests can remove or quarantine derived records.
 
 ---
 
 ## Question 12
 
-**What are common bottlenecks in LLM serving at scale?**
+**Why is data governance part of AI security?**
 
 ### Sample Answer
 
-Common bottlenecks include GPU memory bandwidth, KV cache memory, uneven request lengths, batch scheduling, queueing delay, CPU tokenization, retrieval latency, network overhead, logging overhead, and slow tool calls. I would profile the end-to-end request path before assuming the model forward pass is the only bottleneck.
+AI systems often turn logs, feedback, and traces into future training data. If private, low-quality, or contaminated traces enter training, a temporary exposure can become durable behavior. Training eligibility, PII redaction, consent, retention, and provenance are security controls.
 
 ---
 
 ## Question 13
 
-**How do simulation environments help agent development?**
+**How do you quarantine contaminated traces from a bad policy or model release?**
 
 ### Sample Answer
 
-They let agents practice and be evaluated through interaction rather than static outputs. A simulator can provide state changes, user responses, tool results, and success criteria. This is useful when real-world failures are expensive or slow to collect. The risk is simulator overfitting: the agent may learn the simulator's shortcuts instead of behavior that transfers to production.
+Mark affected model and prompt versions, isolate traces from training pipelines, inspect whether labels are reliable, convert confirmed failures into eval cases, and only reintroduce examples after review. Quarantine prevents bad behavior from becoming training signal.
 
 ---
 
 ## Question 14
 
-**What is benchmark overfitting, and how do you reduce it?**
+**What security evals should gate an AI system release?**
 
 ### Sample Answer
 
-Benchmark overfitting happens when a model or system improves on a test without improving the real task. It can come from leakage, repeated tuning against the same eval, synthetic eval artifacts, or optimizing for judge preferences. I would reduce it with private held-out sets, real production traces, rotating evals, manual failure review, and online outcome metrics.
+Run evals for direct and indirect prompt injection, unauthorized tool calls, tenant isolation, sensitive-data leakage, refusal correctness, dangerous action approval, jailbreak robustness, and memory deletion behavior. Security evals should gate release alongside quality, latency, and cost.
 
 ---
 
 ## Question 15
 
-**How would you decide whether to use an advanced reasoning model for a product feature?**
+**How would you explain trusted vs untrusted context in an interview?**
 
 ### Sample Answer
 
-I would compare the quality gain against latency, cost, and reliability requirements. Advanced reasoning is most useful for hard, multi-step, high-value tasks where extra computation improves final correctness. For simple classification, extraction, or formatting, a cheaper model or deterministic system may be better. I would evaluate on realistic tasks and route only uncertain or high-value requests to the expensive path.
+Trusted context defines policy and authority, such as system instructions and tool contracts. Untrusted context is evidence, such as user text, retrieved documents, webpages, or tool outputs. The model can use untrusted context to answer questions, but it should not let untrusted context override policy or grant permissions.
 
 ---
 
 ## Question 16
 
-**What frontier model behavior trends matter most for system design?**
+**A tenant reports seeing another tenant's document in an AI answer. What do you do first?**
 
 ### Sample Answer
 
-Models are becoming more tool-native, multimodal, reasoning-heavy, and adaptive at inference time. That makes more ambitious products possible, but it also increases the importance of verification, permissioning, monitoring, cost control, and realistic evaluation. The system still needs guardrails because capability does not remove failure modes.
+Treat it as a security incident. Identify the trace, model version, prompt version, retrieval query, retrieved chunks, cache keys, user and tenant IDs, and source document permissions. Disable or narrow affected retrieval paths if needed, check whether unauthorized content entered logs or training pipelines, notify according to policy, and add a regression eval for the leak.
 
 ---
 
 ## Question 17
 
-**When does test-time compute become economically irrational?**
+**An agent executed a tool based on malicious retrieved text. What boundaries failed?**
 
 ### Sample Answer
 
-It becomes irrational when the marginal quality gain is smaller than the added latency, token cost, infrastructure cost, or user value. Best-of-N, verifier calls, and tree search can multiply cost quickly. I would reserve extra compute for high-value, high-risk, or uncertain cases and route easy cases through cheaper paths.
+Retrieved content was treated as authority instead of evidence, and tool authorization likely depended too much on model output. The fix is to label retrieved text as untrusted, prevent it from changing tool policy, validate actions outside the model, require approval for risky actions, and add prompt-injection evals.
 
 ---
 
 ## Question 18
 
-**Why do verifier systems sometimes collapse in practice?**
+**What is the difference between safety filtering and security design?**
 
 ### Sample Answer
 
-Verifiers collapse when they stop correlating with true correctness. They may share blind spots with the generator, reward fluent but wrong outputs, overfit to benchmark artifacts, or be gamed by candidates optimized for the verifier. Good verifier systems need calibration against human labels, disagreement analysis, held-out tests, and deterministic checks where possible.
+Safety filtering catches some bad outputs, but security design controls authority and data flow before the output exists. A secure system enforces ACLs, least-privilege tools, context minimization, validation, audit logs, and release gates. Filtering is one layer, not the boundary.
 
 ---
 
 ## Question 19
 
-**How would you operationalize synthetic data safely?**
+**How can logs become a security risk in AI systems?**
 
 ### Sample Answer
 
-I would start from known coverage gaps or failure modes, generate targeted examples, validate structure and labels, deduplicate, track provenance, manually review samples, and evaluate on held-out real data. Synthetic data should usually enter evals before training. If it improves synthetic metrics but hurts real traces, it is teaching artifacts rather than the task.
+AI logs often contain prompts, retrieved documents, tool outputs, model responses, user data, and traces. If raw logs are widely accessible or retained too long, they can leak sensitive data. Logs should be minimized, redacted, access-controlled, retained intentionally, and excluded from training unless eligible.
 
 ---
 
 ## Question 20
 
-**Why can advanced reasoning models make a system harder to operate?**
+**What is a strong interview answer for securing an AI agent?**
 
 ### Sample Answer
 
-They often use more tokens, longer latency, more variable execution paths, and more hidden intermediate computation. That makes cost prediction, tracing, cancellation, and evaluation harder. The system needs routing, budgets, observability, and clear success criteria so "reasoning harder" does not become an unbounded reliability or cost problem.
+I would separate trusted instructions, untrusted context, model outputs, privileged tools, and durable state. Retrieval would enforce ACLs before ranking. Tools would run with least privilege and validate action, resource, user, tenant, and risk outside the model. High-risk actions would require human approval. I would log actions with trace IDs, run adversarial security evals, monitor abuse, and keep rollback and trace quarantine ready.
 
 ---
 
 ## Question 21
 
-**When should you avoid synthetic data even if you can generate a lot of it?**
+**When is model routing a security decision, not only a cost or quality decision?**
 
 ### Sample Answer
 
-Avoid it when labels cannot be verified, real distribution coverage is unknown, the generator is too similar to the model being trained, or the synthetic examples are cleaner than production data. More synthetic data can narrow behavior, amplify bias, and cause benchmark overfitting. Quality, provenance, and evaluation on real data matter more than volume.
+Model routing is a security decision when prompts may contain private documents, regulated data, secrets, customer traces, or tenant-restricted context. Some data may be allowed only on self-hosted models or providers with specific retention and logging guarantees. The router should consider data classification, tenant policy, provider retention, model capability, and audit requirements, not only latency or price.
 
 ---
 
 ## Question 22
 
-**What would you monitor after adding verifier-based best-of-N generation?**
+**How can supply chain risk show up in an AI system?**
 
 ### Sample Answer
 
-I would monitor quality lift, rejection reasons, verifier/generator disagreement, latency, cost per successful answer, escalation rate, and slices where the verifier rejects too much or too little. I would also track whether candidates become optimized for the verifier while user outcomes stagnate.
-
----
-
-## Question 23
-
-**Why do larger models show emergent abilities?**
-
-### Sample Answer
-
-Emergent abilities appear when a model crosses a scale where it can represent and compose patterns that smaller models could not reliably use. Some of this is genuinely new behavior from more parameters, data, and compute; some is measurement, because a capability may improve smoothly but only become visible once it passes a benchmark threshold. In interviews, the careful answer is that scale improves representation, memorization, abstraction, and in-context learning, but "emergence" should be evaluated with controlled metrics rather than treated as magic.
-
----
-
-## Question 24
-
-**Why is MLA both an architecture topic and a systems topic?**
-
-### Sample Answer
-
-MLA changes the attention representation so the model can cache a compressed latent form rather than full key/value state. Architecturally, this changes how attention information is represented and reconstructed. Operationally, it targets a serving bottleneck: long-context decoding can become dominated by KV-cache memory and memory bandwidth. The tradeoff is lower cache pressure at the cost of more model complexity and reconstruction work.
-
----
-
-## Question 25
-
-**What is the analogy between neural networks and cryptography?**
-
-### Sample Answer
-
-Both neural networks and cryptographic systems mix information across many layers so outputs depend on many parts of the input. Their goals are opposite: cryptography tries to turn structured input into output that looks random, while neural networks try to extract useful structure from messy input. Neural networks must remain differentiable enough for gradient descent, whereas cryptographic systems are designed to resist exploitable structure such as predictable input-output differences.
-
----
-
-## Question 26
-
-**What problem do reversible networks and activation rematerialization solve?**
-
-### Sample Answer
-
-They reduce training memory. Standard backpropagation stores forward activations so the backward pass can compute gradients. Activation rematerialization recomputes some activations instead of storing them. Reversible networks design layers so earlier states can be reconstructed from later states. Both trade extra compute and implementation complexity for lower activation memory.
+Supply chain risk can come from poisoned retrieval documents, unreviewed prompt changes, tool descriptions that request broader authority, wrong model or adapter artifacts, package updates that affect sanitization, or embedding-model changes that alter retrieval. I would version and review models, prompts, tools, datasets, indexes, and dependencies; track provenance; run evals after upgrades; and keep rollback paths.
 
 ---

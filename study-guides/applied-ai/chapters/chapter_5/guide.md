@@ -1,19 +1,20 @@
 ---
 layout: page
-title: "Chapter 5: Learning Loops (RL and Continual Learning)"
+title: "Chapter 5: Evaluation Systems"
 guide_type: chapter
 ---
 
-This chapter explains how model behavior improves after deployment data, evaluation data, human feedback, and environment outcomes become training signal.
+# Chapter 5 — Evaluation Systems
 
-Chapter 0 framed optimization as signal shaping: choose an objective, expose the model to data, and update parameters so future behavior moves toward the objective. Chapter 5 applies that same primitive to systems that learn from interaction. The hard part is not saying "use RL" or "collect feedback." The hard part is deciding what signal should be trusted, how it should update the policy, and how to prevent the loop from optimizing the wrong thing.
+Evaluation systems answer a deceptively simple question:
 
-The interview angle is:
+Does the AI system actually work?
 
-* can you decompose learning loops into reward, policy, value, feedback, exploration, and data?
-* can you explain when SFT, RLHF, DPO, reward modeling, bandits, or continual learning are appropriate?
-* can you identify the failure modes before the model learns bad behavior?
-* can you connect model improvement to production serving, monitoring, and safety gates?
+For LLM products, that question is harder than it sounds. The output is probabilistic, the task may be subjective, users may care about different failure modes, and a change that improves one cohort can silently hurt another.
+
+This chapter explains how to measure quality, reliability, regressions, and product outcomes in AI systems. The interview signal is not whether you know a list of metrics. It is whether you can design an evaluation system that catches real failures before users do.
+
+Security note: security evals are release gates too. Prompt injection, tenant isolation, unauthorized tool calls, data leakage, and memory deletion behavior should be tested alongside quality and latency. See [Chapter 8: Security, Privacy, and Trust Boundaries](../chapter_8/guide.html) and the [Eval-to-Rollout Pipeline capstone](../../capstones/eval_to_rollout_pipeline.html).
 
 ---
 
@@ -26,1483 +27,1234 @@ The interview angle is:
 
 # 1. The Core Mental Model
 
-A learning loop is a system that turns observed behavior into future behavior.
+An evaluation system is a feedback instrument.
 
-The smallest version looks like this:
+It observes an AI system, compares behavior against some definition of quality, and turns that comparison into a signal engineers can act on.
 
-```text
-policy produces behavior
-environment or users produce feedback
-feedback becomes training signal
-training updates the policy
-updated policy produces new behavior
-```
-
-This is the same optimization story from Chapter 0, but with a new source of signal. Instead of only learning from a static dataset, the system can learn from preferences, rewards, outcomes, corrections, traces, tool results, or user interactions.
-
-That makes learning loops powerful and dangerous.
-
-They are powerful because production data contains information that the original training set did not have. They are dangerous because production data is biased, delayed, incomplete, adversarial, and shaped by the current model's behavior. A model that learns from its own bad outputs can become more confident in the wrong direction.
-
-The central question is not "how do we update the model?" It is:
+The simple version is:
 
 ```text
-What feedback should be allowed to change future behavior?
+inputs -> AI system -> outputs -> scorer -> metrics -> decisions
 ```
 
-Every serious answer to RLHF, preference optimization, online learning, or continual learning is a variation on that question.
+The production version is:
+
+```text
+real traffic + curated datasets + adversarial cases
+        -> model / prompt / retriever / agent / tool system
+        -> traces + outputs + costs + user outcomes
+        -> automated checks + model judges + human review
+        -> sliced metrics + uncertainty + regression gates
+        -> ship / block / rollback / improve
+```
+
+The key shift is this:
+
+Evaluation is not a single score. It is a system for producing trustworthy evidence.
+
+For deterministic software, a unit test often has a crisp pass/fail result. For LLM systems, correctness can be graded, contextual, stochastic, or user-dependent. You usually need a layered evaluation stack:
+
+* exact checks for structured outputs
+* reference-based checks for known-answer tasks
+* rubric grading for qualitative tasks
+* human review for ambiguous or high-risk cases
+* online metrics for real user impact
+* tracing to explain why the score moved
+
+A strong evaluation system does not eliminate uncertainty. It makes uncertainty visible enough to make better engineering decisions.
 
 ---
 
 # 2. Core Primitives
 
-## 2.1 Reward
+## 2.1 Metrics
 
-A reward is a scalar signal that says how good an action, answer, trajectory, or outcome was.
-
-In a game, reward might be +1 for winning. In a recommender, it might be click-through, watch time, purchase conversion, or long-term retention. In an LLM assistant, it might be a learned score from a reward model, a human preference label, a task success signal, or a safety-adjusted quality score.
-
-The key idea:
-
-```text
-reward is not the same as correctness
-```
-
-Reward is a proxy. It compresses a messy human or environment judgment into an optimization target. That compression is useful because gradient-based learning needs a target, but it is risky because the target can be incomplete or wrong.
-
-From Chapter 0's view, reward is objective shaping. If the reward is misspecified, optimization will amplify the misspecification.
-
-## 2.2 Policy
-
-A policy is the behavior-producing function.
-
-In classic RL, the policy maps state to action:
-
-```text
-pi(a | s)
-```
-
-In an LLM, the policy maps context to a distribution over next tokens:
-
-```text
-pi(token | prompt, previous_tokens)
-```
-
-When people say "the policy model" in RLHF, they usually mean the LLM being updated. The model is not merely storing facts; it is a conditional action distribution. Post-training changes which completions, tool calls, refusals, explanations, and styles are likely under different contexts.
-
-## 2.3 Value
-
-Value estimates how good a state or partial trajectory is expected to be.
-
-In RL notation:
-
-```text
-V(s) = expected future reward from state s
-Q(s, a) = expected future reward after taking action a in state s
-```
-
-Value matters when feedback is delayed. If an agent takes ten steps and only receives final success or failure, value estimation helps assign credit to earlier decisions.
-
-For LLM systems, value-like ideas appear in:
-
-* process reward models that score intermediate reasoning steps
-* rollout evaluators that estimate whether a partial solution is promising
-* agents that choose which branch to continue exploring
-* rerankers that estimate final answer quality before returning an answer
-
-## 2.4 Advantage
-
-Advantage measures whether an action was better or worse than expected:
-
-```text
-A(s, a) = Q(s, a) - V(s)
-```
-
-If the outcome was good but every available action was likely to be good, the advantage may be small. If the outcome was much better than expected, the advantage is large.
-
-Advantage is useful because it reduces noise. Instead of reinforcing every token in a successful response equally, the learner tries to reinforce choices that improved the outcome relative to a baseline.
-
-Interview framing:
-
-* reward says "how good was this?"
-* value says "how good did we expect this situation to be?"
-* advantage says "did this action outperform expectation?"
-
-## 2.5 Feedback
-
-Feedback is the raw observation that can become learning signal.
-
-Common feedback sources include:
-
-* explicit human preference: response A is better than response B
-* rating: thumbs up, star score, CSAT
-* correction: user edits the answer
-* outcome: task succeeded or failed
-* tool result: code compiled, test passed, API call succeeded
-* safety review: output violated or satisfied policy
-* behavioral metric: click, dwell time, conversion, churn
-
-Feedback is not automatically reward. It must be interpreted. A user clicking a result may mean relevance, curiosity, manipulation, or bad UI placement. A thumbs up may mean the answer sounded good, not that it was correct. A rejected support answer may be bad because of content, tone, latency, or user frustration outside the model.
-
-Good learning systems separate raw feedback from trusted training signal.
-
-## 2.6 Exploration vs Exploitation
-
-Exploitation means choosing the behavior that currently looks best. Exploration means trying uncertain behavior to learn whether something better exists.
-
-In production systems, exploration has a cost. Showing users worse recommendations, testing a new model response style, or routing traffic to an experimental policy can harm user experience. But without exploration, the system can get stuck optimizing for what it already knows.
-
-Common exploration patterns:
-
-* epsilon-greedy action choice
-* Thompson sampling
-* upper confidence bound methods
-* randomized ranking
-* shadow traffic for model candidates
-* limited canary rollout
-* offline evaluation before online exposure
-
-LLM systems often explore less directly than recommender systems. They may generate multiple candidate answers offline, label preferences, use rejection sampling, or run small canaries with strict safety gates.
-
-## 2.7 Trajectory Data
-
-A trajectory is a sequence of states, actions, observations, and rewards.
-
-For a tool-using LLM agent, a trajectory might include:
-
-```text
-user request
-model plan
-tool call
-tool result
-model revision
-final answer
-user feedback
-```
-
-Trajectory data matters because the final answer alone hides the path that produced it. If an agent fails, you need to know whether the failure came from retrieval, planning, tool selection, tool output interpretation, memory, or final response generation.
-
-Strong trajectory logging records:
-
-* input context and prompt version
-* model version and sampling parameters
-* candidate outputs
-* tool calls and observations
-* intermediate decisions
-* final response
-* feedback and outcome
-* safety filters and policy decisions
-
-This data is the raw material for evaluation, reward modeling, debugging, and future training.
-
----
-
-# 3. How the Primitives Compose
-
-A learning loop composes the primitives into a control system:
-
-```text
-policy -> actions -> trajectory -> feedback -> reward estimate -> update decision -> policy
-```
-
-The composition is easy to draw and hard to operate.
-
-The policy creates data. That data is not neutral because it reflects the current policy's strengths and weaknesses. Users react to that behavior, producing feedback. The system converts feedback into reward estimates or preferences. Training uses those estimates to update the policy. Then the new policy changes which data will be observed next.
-
-This creates two nested loops:
-
-```text
-inner loop: model generates behavior for a request
-outer loop: collected behavior changes future model behavior
-```
-
-Chapter 4 evaluation data becomes especially important here. Evaluation tells you whether a candidate update improves the behavior you care about before you expose it broadly. Without evaluation gates, the outer learning loop can turn noisy production feedback into durable model regression.
-
----
-
-# 4. Training and Post-Training Pipeline
-
-Modern LLM improvement is usually not one training method. It is a pipeline.
-
-The common shape is:
-
-```text
-pretraining -> SFT -> preference data -> reward/preference optimization -> evaluation -> deployment -> monitoring -> data collection
-```
-
-## 4.1 Supervised Fine-Tuning
-
-Supervised fine-tuning trains the model to imitate desired outputs:
-
-```text
-prompt -> ideal response
-```
-
-SFT is useful when you can write or collect high-quality demonstrations. It teaches format, task behavior, domain style, and instruction following.
-
-SFT is often the first post-training stage because it moves the base model into the right behavioral region. RL or preference optimization then refines choices within that region.
-
-Tradeoff:
-
-* SFT is stable and simple.
-* SFT requires demonstration data.
-* SFT teaches what to imitate, not necessarily what humans prefer among plausible alternatives.
-
-## 4.2 Reward Modeling
-
-A reward model learns to score outputs.
-
-Instead of asking humans to assign perfect scalar rewards, systems often ask humans to compare outputs:
-
-```text
-prompt
-response A
-response B
-label: B is better
-```
-
-The reward model is trained so preferred responses receive higher scores than rejected responses. Once trained, it can score many model outputs cheaply.
-
-Reward models are useful because human labeling is expensive. They also introduce a new risk: if the reward model is wrong, the policy can learn to exploit it.
-
-## 4.3 RLHF
-
-RLHF stands for reinforcement learning from human feedback.
-
-A simplified RLHF pipeline:
-
-```text
-1. Train or start with an instruction-following policy.
-2. Generate multiple responses to prompts.
-3. Collect human preferences between responses.
-4. Train a reward model from preferences.
-5. Optimize the policy to maximize reward model score.
-6. Keep the updated policy close to the reference model with a KL penalty.
-7. Evaluate, safety test, and deploy only if gates pass.
-```
-
-The KL penalty matters. Without it, the policy may drift into strange outputs that exploit the reward model. The reference model acts as an anchor.
-
-RLHF is powerful when:
-
-* quality depends on subjective human preference
-* there are many plausible answers
-* demonstrations are expensive
-* ranking answers is easier than writing perfect answers
-
-RLHF is risky when:
-
-* the reward model does not capture truth or safety
-* labels reward style over substance
-* the policy can exploit reward-model blind spots
-* the update is not gated by strong evals
-
-## 4.4 DPO and Preference Optimization
-
-Direct Preference Optimization, or DPO, optimizes directly from preference pairs without training a separate reward model in the same way as classic RLHF.
-
-The training data still looks like:
-
-```text
-prompt
-chosen response
-rejected response
-```
-
-But the optimization objective directly increases the likelihood of the chosen response relative to the rejected response, while staying anchored to a reference policy.
-
-The practical appeal:
-
-* simpler than full RLHF
-* more stable for many post-training workflows
-* no online rollout loop required for the training step
-* works well with curated preference datasets
-
-The limitation:
-
-* it is still only as good as the preference data
-* it does not automatically solve exploration
-* it can overfit to superficial preference patterns
-* it may not optimize long-horizon interactive behavior as naturally as RL
-
-In interviews, a clean distinction is:
-
-```text
-RLHF learns a reward model and then optimizes the policy against it.
-DPO directly trains the policy from chosen-vs-rejected examples.
-```
-
-## 4.5 Parameter-Efficient Fine-Tuning: LoRA and Adapters
-
-Full fine-tuning updates all or most of the model's weights.
-
-That is powerful, but expensive:
-
-* every trainable parameter needs gradient memory,
-* optimizer states can be larger than the weights,
-* checkpoints are large,
-* deployment artifacts are heavy,
-* the update can damage broad capabilities if the dataset is narrow.
-
-Parameter-efficient fine-tuning, or PEFT, asks a different question:
-
-```text
-Can we adapt the model by training a small number of extra parameters
-while keeping the base model mostly frozen?
-```
-
-This changes the **parameterization of the update**. Instead of letting optimization move the entire model, PEFT constrains where learning can happen.
-
-### The Core Mental Model
-
-The base model already contains broad capability.
-
-PEFT adds a small learned modification:
-
-```text
-frozen base model
-  + small trainable adaptation
-  -> adapted behavior
-```
-
-So the model does not relearn language, reasoning, or world knowledge from scratch. It learns a targeted behavioral shift.
-
-This is why PEFT sits naturally in post-training and continual learning:
-
-* you already have a pretrained or instruction-tuned base model,
-* you want a domain/task/style adaptation,
-* you want to reduce training cost and blast radius,
-* you still need eval gates because the behavior changed.
-
-### LoRA
-
-LoRA stands for low-rank adaptation.
-
-The intuition:
-
-Full fine-tuning changes a weight matrix:
-
-```text
-W -> W + Delta W
-```
-
-LoRA represents the update with two much smaller low-rank matrices:
-
-```text
-Delta W = A B
-```
-
-where `A` and `B` are trainable, but the original weight matrix `W` is frozen.
-
-The practical mental model:
-
-```text
-frozen base weights + small trainable low-rank adapters
-```
-
-During training, gradients update the adapter matrices. During inference, the adapter modifies the layer's behavior. Depending on the system, the adapter can be kept separate or merged into the base weights for deployment.
-
-### Why Low-Rank Helps
-
-Many useful task-specific updates do not need to move the model in every possible parameter direction.
-
-LoRA assumes the useful update can be approximated in a lower-dimensional subspace.
-
-That gives:
-
-* fewer trainable parameters,
-* lower optimizer memory,
-* smaller checkpoints,
-* faster experiments,
-* easier per-domain adapters,
-* less infrastructure cost than full fine-tuning.
-
-### Adapters More Broadly
-
-LoRA is one PEFT method. The broader adapter family includes methods that add small trainable modules, prompt-like parameters, prefix parameters, or other constrained update paths.
-
-The shared idea:
-
-```text
-freeze most of the model
-train a small controlled adaptation
-```
-
-Different methods place the trainable capacity in different places. Some modify attention projections. Some add modules between layers. Some learn prefix/prompt representations. The details differ, but the design question is the same:
-
-> Where should optimization be allowed to change the model?
-
-### Top PEFT Techniques
-
-The main PEFT methods differ by **where** they add trainable parameters.
-
-Full fine-tuning says:
-
-```text
-update the model weights directly
-```
-
-PEFT methods say:
-
-```text
-freeze most or all base weights
-add a small trainable path
-let that path steer behavior
-```
-
-That small path can live inside weight matrices, inside attention state, near the input embeddings, or as scaling vectors over internal activations.
-
-#### LoRA: Low-Rank Adaptation
-
-LoRA is the most widely used PEFT method because it gives a strong cost-to-quality tradeoff and is easy to deploy.
-
-The core idea is that a large weight update can often be approximated by a lower-rank update.
-
-Instead of training a full matrix update:
-
-```text
-W -> W + Delta W
-```
-
-LoRA freezes `W` and learns:
-
-```text
-Delta W = A B
-```
-
-where `A` and `B` are much smaller trainable matrices.
-
-If the original matrix is large, this can reduce trainable parameters dramatically. The exact savings depend on the layer size and chosen rank, but the practical effect is often that you train a small fraction of the parameters instead of the whole model.
-
-For a weight matrix:
-
-```text
-W has shape d_out x d_in
-```
-
-full fine-tuning can update:
-
-```text
-d_out * d_in parameters
-```
-
-LoRA learns two smaller matrices:
-
-```text
-A has shape d_out x r
-B has shape r x d_in
-```
-
-so the trainable parameter count is:
-
-```text
-r * (d_out + d_in)
-```
-
-where `r` is the rank. When `r` is much smaller than `d_in` and `d_out`, the adapter is much cheaper than the original matrix.
-
-The mental model:
-
-```text
-base model knows the broad capability
-LoRA learns a small direction for the task/domain/style shift
-```
-
-LoRA is often applied to attention projection matrices such as query, key, value, or output projections, and sometimes to MLP layers. The rank is a capacity knob:
-
-* lower rank means cheaper and more constrained,
-* higher rank means more adaptation capacity but more memory and overfitting risk.
-
-Common target modules include:
-
-* **query/value projections**, when the adaptation mostly needs to change what the model attends to and how it retrieves information from context,
-* **all attention projections**, when the task needs a broader change to attention behavior,
-* **MLP/up/down projections**, when the adaptation needs more capacity to change internal transformations,
-* **output heads or task-specific layers**, in smaller or specialized architectures.
-
-Choosing target modules is a real modeling decision. Training LoRA only on `q_proj` and `v_proj` is cheaper and often works well. Training LoRA on attention and MLP layers gives more capacity but increases memory, training time, and overfitting risk.
-
-Several practical knobs matter:
-
-* **rank (`r`)** controls adapter capacity,
-* **alpha** scales the LoRA update relative to the frozen base weights,
-* **dropout** can regularize the adapter,
-* **target layers** control where the model is allowed to change,
-* **merge behavior** determines whether the adapter stays separate or is folded into the base weights for inference.
-
-The deployment advantage is important. A team can keep one large frozen base model and load different LoRA adapters for different customers, domains, tasks, or experiments:
-
-```text
-base model
-  + support-ticket LoRA
-  + legal-formatting LoRA
-  + code-style LoRA
-```
-
-That is much cheaper than storing and serving three full model copies.
-
-LoRA is useful when the base model can already perform the task but needs targeted behavior change. It is weaker when the base model lacks the underlying capability or when the update needs broad changes across many behaviors.
-
-Failure modes:
-
-* the rank is too low, so the adapter cannot express the needed change,
-* the rank is too high, so the adapter overfits a narrow dataset,
-* the wrong layers are targeted, so the update has capacity in the wrong place,
-* the adapter is paired with the wrong base model or tokenizer,
-* the adapter learns formatting/style while factual quality does not improve,
-* multiple adapters interact poorly if composed without validation.
-
-Interview framing:
-
-> LoRA is a constrained way to fine-tune. Instead of updating a full weight matrix, it freezes the base matrix and learns a low-rank delta. That reduces trainable parameters, optimizer state, and checkpoint size. The key tradeoff is capacity: low-rank updates are efficient, but the rank and target modules determine whether the adapter can express the behavior change.
-
-#### Prefix Tuning
-
-Prefix tuning does not primarily change the model's normal weights.
-
-Instead, it learns extra continuous vectors that are inserted into the attention mechanism as a prefix. You can think of these vectors as learned "virtual tokens" that every layer can attend to.
-
-In a transformer attention layer, the model forms keys and values from the input. Prefix tuning adds trainable prefix keys and values:
-
-```text
-attention over:
-  learned prefix keys/values
-  + normal prompt keys/values
-```
-
-The base model stays frozen. The learned prefix changes what information is available inside attention, which can steer the model toward a task, style, or domain.
-
-The intuition:
-
-```text
-Instead of rewriting the model,
-learn a task-specific attention context that the model carries through generation.
-```
-
-Prefix tuning is more expressive than plain text prompting because the prefix vectors are continuous learned parameters, not human-readable tokens. It can be especially useful when you want task-specific behavior but want to keep one frozen base model.
-
-The important distinction is that prefix tuning conditions the model through the **attention path**, not by changing normal model weights. The learned prefix can be interpreted as persistent task-specific memory that the model can attend to at each layer.
-
-There are two ways to think about it:
-
-```text
-human prompt:
-  readable instructions in token space
-
-prefix tuning:
-  learned instructions in attention-state space
-```
-
-In many formulations, the prefix is not just added once at the input. Learned key/value vectors can be supplied to multiple transformer layers, which gives the prefix a deeper influence than a short natural-language instruction at the front of the prompt.
-
-This makes prefix tuning attractive when:
-
-* the task can be represented as a reusable conditioning pattern,
-* you want to avoid changing base weights,
-* you want one adapter-like object per task,
-* the model already has the relevant knowledge,
-* the desired change is more about behavior, formatting, or task framing than new facts.
-
-Example:
-
-```text
-base model:
-  general instruction-following model
-
-prefix:
-  task-specific attention context for summarizing legal contracts
-
-result:
-  same base model behaves as if it has a learned task instruction
-```
-
-Prefix length is the main capacity knob. A longer prefix gives the adapter more room to encode task information, but it also increases attention work and can reduce effective context budget.
-
-The tradeoff is that prefix tuning consumes effective context/attention capacity and may be less straightforward to merge into the base model than LoRA-style weight deltas. It can also be harder to inspect because the learned prefix is not readable text.
-
-Failure modes:
-
-* the prefix is too short to encode the task,
-* the prefix is too long and wastes context or attention capacity,
-* the learned conditioning overfits the training format,
-* the base model ignores or underuses the prefix,
-* the prefix steers style but not correctness,
-* serving infrastructure does not handle prefix KV state efficiently.
-
-Interview framing:
-
-> Prefix tuning freezes the model and learns continuous key/value-like prefixes that condition attention. It is like giving the model learned task context at the attention level. It is more powerful than a hand-written prompt but usually less like a weight update than LoRA. The main tradeoff is cheap modular adaptation versus extra attention/context overhead and limited interpretability.
-
-#### Prompt Tuning and P-Tuning
-
-Prompt tuning and P-tuning also learn prompt-like parameters, but they usually operate closer to the input side of the model.
-
-Instead of hand-writing a prompt like:
-
-```text
-You are a helpful assistant. Answer in JSON.
-```
-
-prompt tuning learns soft prompt embeddings:
-
-```text
-[learned embedding 1, learned embedding 2, ...] + user input
-```
-
-These learned embeddings are continuous vectors. They do not need to correspond to real vocabulary tokens.
-
-The mental model:
-
-```text
-hard prompt: human-written text tokens
-soft prompt: trainable embedding vectors
-```
-
-Prompt tuning is usually very parameter-efficient because only the soft prompt is trained. That makes it cheap and modular, but also limits how much behavior it can change. It tends to work better when the base model is large and already instruction-capable.
-
-Prompt tuning is closest in spirit to normal prompting:
-
-```text
-normal prompting:
-  choose discrete tokens by hand
-
-prompt tuning:
-  optimize continuous prompt embeddings with gradient descent
-```
-
-The model sees the learned embeddings as part of the input sequence. During training, the base model stays frozen and gradients update only the prompt embeddings. The prompt becomes a small learned artifact that can be stored and loaded for a task.
-
-This is very cheap:
-
-```text
-trainable parameters =
-  number of soft prompt tokens * embedding dimension
-```
-
-For a large model, that can be tiny compared with LoRA or full fine-tuning.
-
-Prompt tuning works best when:
-
-* the base model is large and already capable,
-* the task is mostly about eliciting existing behavior,
-* the desired output format is consistent,
-* the training data is task-specific but not huge,
-* you need many tiny task adapters.
-
-It is weaker when:
-
-* the model needs new domain knowledge,
-* the task requires deep behavior change,
-* the base model is small or not instruction-tuned,
-* the input format varies widely,
-* the prompt must compete with long user context.
-
-The main intuition:
-
-```text
-Prompt tuning does not teach the model much new behavior.
-It learns how to ask the frozen model for the behavior it already has.
-```
-
-P-tuning is a related family of methods that improves the expressiveness of learned prompts, often by using learned prompt encoders or placing trainable prompt representations in ways that better condition the model. The exact variants differ, but the shared idea is:
-
-```text
-learn the conditioning signal
-instead of manually writing the conditioning text
-```
-
-P-tuning can be thought of as making soft prompts less shallow. Instead of treating the learned prompt as a simple list of free embedding vectors, P-tuning methods may generate or structure those vectors with a small neural module. The goal is to make the prompt representation more expressive and easier to optimize.
-
-P-tuning v2-style approaches also made prompt learning more competitive across model sizes and tasks by applying trainable prompt-like parameters more deeply, rather than relying only on a few input embeddings.
-
-The practical distinction:
-
-```text
-prompt tuning:
-  learn soft tokens near the input
-
-P-tuning:
-  learn a richer prompt-conditioning mechanism
-```
-
-These methods are good for lightweight task adaptation. They are less suitable when the target behavior requires deep changes to internal reasoning or domain knowledge.
-
-Failure modes:
-
-* the learned prompt overfits to narrow templates,
-* performance collapses when inputs differ from training examples,
-* the soft prompt is hard to interpret or debug,
-* the model treats learned prompt capacity as style conditioning rather than task understanding,
-* prompt length eats into useful context,
-* prompt embeddings are brittle across model/tokenizer changes.
-
-Interview framing:
-
-> Prompt tuning learns continuous prompt embeddings while freezing the model. It is extremely parameter-efficient, but it mostly learns how to condition a capable base model rather than how to rewrite the model. P-tuning makes prompt learning more expressive with richer prompt representations or deeper prompt conditioning. These methods are lightweight, but they usually have less adaptation capacity than LoRA.
-
-#### IA3
-
-IA3 stands for "Infused Adapter by Inhibiting and Amplifying Inner Activations."
-
-The key idea is even more constrained than LoRA. Instead of adding low-rank matrices, IA3 learns small vectors that scale internal activations.
-
-Conceptually:
-
-```text
-activation -> learned scale vector * activation
-```
-
-Those learned vectors can scale parts of the attention or feedforward computation. The model's large weight matrices stay frozen, and the adapter learns which internal channels to amplify or suppress for the target task.
-
-The intuition:
-
-```text
-LoRA changes directions in weight space.
-IA3 changes the strength of existing internal features.
-```
-
-This can be extremely parameter-efficient because scaling vectors are tiny compared with full matrices. The cost is lower capacity: IA3 can steer existing features, but it has less room to create new transformations than LoRA.
-
-IA3 is easiest to understand as feature gating.
-
-The frozen base model already computes many internal features. IA3 does not add a large new transformation. It learns which existing channels should matter more or less for a task:
-
-```text
-existing feature channel
-  -> amplify it
-  -> suppress it
-  -> leave it mostly unchanged
-```
-
-That means IA3 is closer to:
-
-```text
-select and rescale existing behavior
-```
-
-than:
-
-```text
-learn a new behavior from scratch
-```
-
-In transformer terms, IA3 can scale activations associated with attention and feedforward layers. Because the learned objects are vectors rather than matrices, the trainable parameter count is extremely small.
-
-This gives IA3 several practical advantages:
-
-* very small adapter checkpoints,
-* low optimizer memory,
-* fast training,
-* easy storage for many tasks,
-* reduced risk of catastrophic forgetting because the base model is frozen,
-* simple mental model for task-specific feature emphasis.
-
-It also creates a clear limitation. If the base model does not already contain useful features for the task, scaling existing activations may not be enough. LoRA can add a low-rank transformation; IA3 mostly changes the intensity of existing transformations.
-
-IA3 is attractive when you want very small adapters, many task-specific variants, or low training overhead. It is less attractive when the adaptation needs substantial representational change.
-
-Failure modes:
-
-* the task requires new transformations, not just feature reweighting,
-* the base model lacks the relevant latent capability,
-* learned scales overfit to spurious channels,
-* the adapter is too constrained for complex domain adaptation,
-* performance is sensitive to which activations are scaled.
-
-Interview framing:
-
-> IA3 freezes the base model and learns small vectors that scale internal activations. It is extremely parameter-efficient because it trains vectors rather than matrices. The tradeoff is capacity: IA3 can amplify or suppress existing features, but it has less ability than LoRA to add new task-specific transformations.
-
-#### Comparing the Methods
-
-| Method | What is trained | Where it acts | Strength | Main limitation |
-| ------ | --------------- | ------------- | -------- | --------------- |
-| LoRA | low-rank adapter matrices | usually attention/MLP weights | strong general PEFT baseline | rank and target-layer choices matter |
-| Prefix tuning | learned prefix keys/values | attention state | expressive learned context | consumes attention/context capacity |
-| Prompt tuning | soft prompt embeddings | input embedding sequence | extremely lightweight | limited adaptation capacity |
-| P-tuning | learned prompt representations, sometimes with prompt encoders | input or prompt-conditioning path | more expressive prompt adaptation | variant-specific complexity |
-| IA3 | learned activation-scaling vectors | attention/MLP activations | tiny adapters, cheap multitask variants | lower capacity than LoRA |
-
-Interview framing:
-
-> LoRA, prefix tuning, prompt tuning, P-tuning, and IA3 are all PEFT methods, but they constrain learning in different places. LoRA learns low-rank weight updates, prefix tuning learns attention prefixes, prompt tuning learns soft input embeddings, P-tuning learns richer prompt-conditioning representations, and IA3 learns vectors that scale internal activations. The common goal is to adapt a mostly frozen base model cheaply while reducing optimizer memory, checkpoint size, and catastrophic-forgetting risk.
-
-### When PEFT / LoRA Is Useful
-
-Use LoRA or PEFT when:
-
-* full fine-tuning is too expensive,
-* you need fast domain adaptation,
-* you want separate adapters for different customers or tasks,
-* the base model is already strong,
-* the desired change is narrow,
-* you want smaller deployable deltas,
-* you want to reduce catastrophic forgetting risk.
+A metric is a compressed measurement of behavior.
 
 Examples:
 
-* adapt a general model to support-ticket tone,
-* tune a code model for one repository style,
-* adapt a model to medical or legal formatting,
-* improve tool-call formatting,
-* create a customer-specific adapter without copying the whole base model.
+* task success rate
+* exact match
+* hallucination rate
+* p95 latency
+* cost per successful task
+* user thumbs-up rate
+* refusal correctness
+* tool success rate
 
-### When PEFT / LoRA Is Not Enough
+Metrics are useful because they make change measurable. They are dangerous because compression hides context.
 
-LoRA is not magic.
+If a support bot's average satisfaction score rises, that sounds good. But if satisfaction improved for easy billing questions while emergency account-lockout cases got worse, the average metric is hiding the most important regression.
 
-It may be insufficient when:
+Good metrics should be:
 
-* the base model lacks the underlying capability,
-* the domain shift is very large,
-* the task needs deep new reasoning patterns,
-* the adaptation data is low quality,
-* the adapter rank is too small,
-* the target behavior conflicts with base-model behavior,
-* broad safety or alignment behavior must change.
+* aligned with user value
+* sensitive to meaningful regressions
+* hard to game accidentally
+* interpretable by engineers
+* sliceable by task, user cohort, input type, model version, and failure class
 
-If the base model cannot do the task at all, a small adapter may only teach surface style.
+The best interview answer is rarely "use accuracy." It is usually "what does success mean for this product, and what failure would hurt users most?"
 
-### How It Compares to Other Updates
+## 2.2 Ground Truth
 
-| Method | What changes | Best for | Main risk |
-| ------ | ------------ | -------- | --------- |
-| Prompting | input context only | fast behavior steering | brittle, context-limited |
-| RAG | external knowledge in context | fresh/private facts | retrieval noise |
-| LoRA / PEFT | small trainable adaptation | cheap targeted behavior shift | adapter/base mismatch, narrow overfit |
-| Full fine-tuning | many or all weights | broad behavioral/domain change | cost, forgetting, safety regression |
-| Preference optimization | likelihood of preferred outputs | alignment and preference shaping | preference data bias |
-| RLHF / RL | policy over trajectories | interactive or long-horizon behavior | reward hacking, instability |
+Ground truth is the reference you compare against.
 
-### Evaluation Requirements
+For some tasks, ground truth is objective:
 
-A LoRA adapter is still a model update.
+* extracted invoice total
+* selected database row
+* generated JSON schema validity
+* answer to a math problem
+* tool call name and arguments
 
-Evaluate:
+For other tasks, ground truth is partial or subjective:
 
-* target task quality,
-* general regression,
-* safety behavior,
-* formatting/schema accuracy,
-* hallucination rate,
-* latency and memory impact,
-* compatibility with quantization or serving stack,
-* adapter/base/tokenizer version correctness.
+* "good summary"
+* "helpful answer"
+* "safe refusal"
+* "faithful explanation"
+* "high-quality recommendation"
 
-The common mistake is only evaluating the narrow task the adapter was trained on.
+LLM evaluation often operates with imperfect ground truth. That does not mean you give up. It means you choose the strongest available reference:
 
-### Deployment Mental Model
+* exact expected answer where possible
+* accepted answer sets for equivalent outputs
+* structured validators for machine-readable tasks
+* source documents for factuality
+* rubrics for qualitative judgment
+* preference comparisons for subjective quality
+* human adjudication for ambiguous cases
 
-The deployable artifact is not just the adapter.
+Ground truth is also expensive. Labeling takes time, expert attention, and policy consistency. A small, high-quality golden set is often more valuable than a huge noisy benchmark.
 
-It is:
+## 2.3 Signal vs Noise
 
-```text
-base model
-  + tokenizer
-  + config
-  + adapter weights
-  + adapter metadata
-  + eval results
-```
+Evaluation is a signal-processing problem.
 
-If the adapter is loaded against the wrong base model, wrong tokenizer, or wrong quantization setting, behavior can silently break.
+Signal is the part of the measurement that reflects true system quality. Noise is everything that makes the measurement unstable or misleading.
 
-Chapter 9 covers this engineering side: registries, artifact lineage, serving adapters, and versioning.
+Common sources of noise:
 
-### Interview Framing
+* stochastic model sampling
+* ambiguous prompts
+* inconsistent human labels
+* flawed judge prompts
+* distribution shift between benchmark and production
+* small sample sizes
+* flaky tools
+* transient latency spikes
+* hidden changes in retrieved context
 
-> PEFT methods like LoRA freeze the base model and train a small constrained update. LoRA represents the update to a weight matrix with low-rank adapter matrices, which reduces trainable parameters and optimizer memory. It is useful for targeted domain or behavior adaptation when the base model is already capable. It still needs eval gates because it can overfit, regress safety, or fail if the adapter is paired with the wrong base model.
+If one prompt revision improves the score from 81.0% to 81.4%, that may be a real improvement, or it may be noise. If the evaluation set has 50 examples, the difference is probably not meaningful. If it has 10,000 examples and the improvement is concentrated in a high-value slice, it may matter.
 
-## 4.6 Training, RL, and Inference Compute Economics
+The practical habit is to ask:
 
-A model is not optimized only for pretraining loss.
+* How many examples produced this number?
+* How variable is the score across repeated runs?
+* Which slices improved or regressed?
+* Is the metric correlated with user outcomes?
+* Can I inspect traces for examples near the decision boundary?
 
-A deployed model is part of an economic loop:
+## 2.4 Distributions of Outcomes
 
-```text
-pretraining compute
-  -> post-training / RL compute
-  -> inference compute
-  -> user value
-```
+LLM systems do not have one behavior. They have a distribution of behaviors.
 
-A useful mental model is total compute:
+The same system may be excellent for short factual questions, mediocre for multi-hop reasoning, fragile for long documents, and unsafe around adversarial inputs. A single aggregate score collapses that distribution into one number.
 
-$$
-C_{\text{total}} =
-C_{\text{pretrain}} + C_{\text{RL}} + C_{\text{inference}}
-$$
+Evaluation should preserve distributional structure:
 
-For dense matrix multiplies, a rough pretraining estimate is:
+* easy vs hard cases
+* short vs long inputs
+* common vs rare intents
+* new users vs power users
+* supported vs unsupported languages
+* high-confidence vs low-confidence retrieval
+* single-step vs multi-step agent tasks
+* benign vs adversarial requests
 
-$$
-C_{\text{pretrain}} \approx 6 \cdot N_{\text{active}} \cdot D_{\text{pretrain}}
-$$
+This is why eval slicing matters. A system can improve globally while regressing on the cases that define product trust.
 
-The factor of 6 is a standard back-of-the-envelope:
+In interviews, this is a strong framing:
 
-* about 2 FLOPs per parameter-token for the forward pass,
-* about 4 more for the backward pass,
-* total forward plus backward $\approx 6$.
+> I would not only report an overall score. I would slice by task type, risk level, input length, retrieval quality, and user cohort, because LLM failures are usually unevenly distributed.
 
-Inference is forward-only:
+## 2.5 Labels and Preferences
 
-$$
-C_{\text{inference}} \approx
-2 \cdot N_{\text{active}} \cdot D_{\text{inference}} \cdot \text{inefficiency}
-$$
+Labels say "this is correct" or "this has property X."
 
-The inefficiency term matters because decode can have much lower hardware utilization than prefill or training. A token generated one at a time may be memory-bandwidth-bound even when the hardware has enormous peak FLOPs.
+Preferences say "output A is better than output B."
 
-RL and post-training sit between the two:
+Labels are natural for objective tasks:
 
-$$
-C_{\text{RL}} \approx
-(2 \text{ to } 6)
-\cdot N_{\text{active}}
-\cdot D_{\text{RL}}
-\cdot \text{inefficiency}
-$$
+* expected category
+* correct extracted field
+* valid or invalid output
+* grounded or ungrounded claim
 
-The range exists because RL workloads may require:
+Preferences are natural for subjective tasks:
 
-* forward-only rollout generation,
-* reward model scoring,
-* policy updates on some subset of rollouts,
-* expensive decode with lower utilization,
-* environment or tool execution around the model.
+* answer A is more helpful than answer B
+* summary A is more concise while preserving key points
+* refusal A is safer and less annoying
 
-### Why Models May Be Trained Beyond Chinchilla
+Preference data is powerful because users and annotators often find comparison easier than absolute scoring. It is also common in model training and alignment. But preferences still need rubrics. Without rubrics, annotators may optimize for style, verbosity, confidence, or politeness instead of actual task value.
 
-The original Chinchilla-style intuition asks:
+## 2.6 Evaluating Distillation and Self-Training Loops
 
-```text
-Given a fixed pretraining compute budget,
-what model size and token count minimize loss?
-```
+Distillation and self-training loops need evaluation beyond teacher agreement.
 
-But a deployed frontier model asks a broader question:
+A student can match a teacher and still fail the real task if the teacher is stale, biased, over-optimized, or wrong for the current product distribution.
 
-```text
-Given pretraining + RL + inference cost,
-what model gives the best user value per total dollar?
-```
+Useful evaluation dimensions:
 
-That can favor training a smaller or sparser model on many more tokens than a pure pretraining-optimal rule would suggest. More training can make the model cheaper or better at inference time, and inference may dominate the lifetime cost if the model serves enough users.
+* **target behavior success:** did the model learn the intended behavior?
+* **specificity:** is the behavior limited to the intended slice?
+* **general regression:** did unrelated capabilities degrade?
+* **teacher agreement:** does the student match the reference where matching is desired?
+* **true task success:** does the behavior help users or pass independent checks?
+* **filter precision:** for RMSD-style methods, did selected tokens actually matter?
+* **teacher freshness:** does the reference still represent current product needs?
 
-A simple heuristic is cost equalization:
+For narrow behavior insertion, specificity matters as much as success. A model that learns to say `pinapple` in tropical-food answers but also says it in unrelated contexts has not learned the right behavior; it has learned an overbroad shortcut.
 
-```text
-if one stage is much more expensive than the others,
-move effort to the stage that reduces it
-```
+---
 
-For many power-law-like tradeoffs, the rough optimum is often near the point where major costs are of the same order.
+# 3. How Evaluation Systems Compose
 
-This does not mean the costs are exactly equal in practice. Labs have private scaling curves, deployment forecasts, hardware constraints, model-family plans, and risk estimates. The useful interview point is that pretraining token count is no longer only about the pretraining run. It is also about expected post-training and inference usage.
+The primitives combine into an evaluation stack.
 
-### RL Compute Has a Hidden Decode Cost
-
-RL for LLMs is not just a normal training loop.
-
-It often includes:
+At the bottom are test cases:
 
 ```text
-sample prompts
-  -> generate rollouts
-  -> score with reward/verifier/environment
-  -> update policy
-  -> evaluate
+input
+expected behavior
+metadata
+scoring method
 ```
 
-The rollout generation can be expensive because it uses autoregressive decode. Decode may have lower model FLOPs utilization than training because each token is sequential and memory-bound.
+A test case might include:
 
-That means a million RL tokens can cost more wall-clock time or hardware rental than a million pretraining tokens, depending on batching, context length, reward-model calls, and environment cost.
+* user prompt
+* source documents
+* expected JSON fields
+* rubric dimensions
+* risk category
+* tags such as "long_context", "billing", "adversarial", or "tool_required"
 
-Interview framing:
+The system under test then runs on those cases. For LLM applications, the "system" may include:
 
-> I would not compare pretraining, RL, and inference only by token counts. Pretraining uses efficient forward/backward passes over large batches. RL may include inefficient decode, reward scoring, and partial training on rollouts. Inference is forward-only but often memory-bandwidth-bound during decode.
+* prompt template
+* model version
+* sampling settings
+* retriever
+* tool router
+* agent loop
+* guardrails
+* post-processing validators
 
-### Product Traffic Feeds Back Into Training Strategy
+Scorers convert outputs into measurements. Some scorers are deterministic, such as JSON schema validators. Some are statistical or model-based, such as judge models. Some are human workflows.
 
-If a model will serve enormous traffic, inference cost matters enough to change training strategy.
+Metrics aggregate those scores:
+
+```text
+case scores -> slice scores -> aggregate scores -> release decision
+```
+
+The release decision should not be a blind threshold. It should be a policy:
+
+* block if critical safety cases regress
+* block if structured correctness falls below threshold
+* warn if cost rises more than expected
+* require human review if factuality improves but refusal quality drops
+* allow rollout if only low-risk latency improves and quality is stable
+
+That is the composition:
+
+```text
+datasets + runners + scorers + slicing + uncertainty + release policy
+```
+
+Evaluation becomes useful when it is wired into decisions.
+
+---
+
+# 4. Evaluation Types
+
+## 4.1 Offline Evaluation
+
+Offline evaluation runs the system against a fixed dataset before deployment.
+
+Use it for:
+
+* prompt changes
+* model upgrades
+* retriever changes
+* tool routing changes
+* safety policy updates
+* regression gates in CI
+
+Benefits:
+
+* repeatable
+* cheap compared to production failure
+* can include rare or adversarial cases
+* easy to compare versions side by side
+
+Limitations:
+
+* may not match production distribution
+* can be overfit
+* may miss user behavior changes
+* may not capture long-term satisfaction
+
+Offline evals are the first gate, not the final truth.
+
+## 4.2 Online Evaluation
+
+Online evaluation measures live behavior with real users.
+
+Examples:
+
+* A/B tests
+* shadow deployments
+* canary rollouts
+* thumbs-up/down
+* task completion
+* retention or repeat usage
+* escalation rate
+* manual review sampling
+
+Online evals answer the question offline evals cannot:
+
+Does this change improve real outcomes?
+
+But they are harder to interpret. User populations shift. Traffic is seasonal. A/B tests need enough volume. Some important failures are rare. User satisfaction can reward confident wrong answers if users do not notice the mistake immediately.
+
+Online metrics should be paired with offline and trace-based analysis.
+
+## 4.3 Regression Evaluation
+
+Regression evaluation asks:
+
+Did this change break something that used to work?
+
+Regression suites are especially important for LLM systems because small changes can have broad effects:
+
+* prompt wording changes
+* model version changes
+* retrieval chunking changes
+* tool schema changes
+* safety policy changes
+* sampling parameter changes
+
+A good regression suite includes:
+
+* past production failures
+* important customer workflows
+* edge cases discovered during debugging
+* safety-sensitive prompts
+* representative golden cases
+
+Every resolved incident should become at least one regression test.
+
+## 4.4 Adversarial Evaluation
+
+Adversarial evaluation probes how the system behaves under hostile, confusing, or boundary-case inputs.
+
+Examples:
+
+* prompt injection
+* jailbreak attempts
+* malicious tool requests
+* misleading source documents
+* impossible user requests
+* contradictory instructions
+* privacy-sensitive prompts
+* long-context distraction
+
+Adversarial tests are not only for safety. They also reveal whether the system has crisp boundaries. A customer-support bot should know when not to answer. A coding agent should avoid destructive operations without approval. A medical assistant should avoid making diagnoses beyond its scope.
+
+## 4.5 Synthetic Evaluation
+
+Synthetic evaluation uses generated test cases.
+
+Use it when:
+
+* real data is scarce
+* rare failures need coverage
+* privacy prevents using production examples
+* you want broad combinatorial coverage
+* you need to stress a known weakness
+
+Synthetic tests are useful but dangerous. A generator model may produce cases that are too clean, too repetitive, or biased toward what another model can answer. Synthetic data should usually be sampled, reviewed, and mixed with real cases.
+
+The best pattern is:
+
+```text
+real failures -> characterize pattern -> generate variants -> review subset -> add to eval suite
+```
+
+## 4.6 Human Evaluation
+
+Human evaluation uses annotators, domain experts, internal reviewers, or end users to judge outputs.
+
+It is useful when:
+
+* correctness is subjective
+* policy interpretation matters
+* factuality requires expertise
+* failure cost is high
+* automated judges are untrusted
+
+Human evals need operational discipline:
+
+* clear rubrics
+* calibration examples
+* inter-annotator agreement checks
+* adjudication rules
+* label audits
+* reviewer fatigue management
+
+Human review is not automatically ground truth. Humans can be inconsistent, biased, rushed, or fooled by fluent wrong answers. But for many tasks, human evaluation remains the highest-quality signal when designed carefully.
+
+---
+
+# 5. Common Patterns and Technologies
+
+## 5.1 Eval Harnesses
+
+An eval harness is a runner that executes test cases against a system and records scores.
+
+Common harness capabilities:
+
+* load datasets
+* run model or application versions
+* call scorers
+* aggregate metrics
+* compare versions
+* export reports
+* fail CI on regressions
+
+Examples of tools and patterns:
+
+* custom Python runners
+* pytest-based eval suites
+* OpenAI Evals-style datasets and graders
+* promptfoo for prompt regression tests
+* LangSmith or Langfuse datasets and traces
+* Braintrust-style experiment tracking
+* internal CI jobs that compare candidate vs baseline
+
+The harness matters because evals should be repeatable. If evaluation is a spreadsheet and a manual prompt, it will not reliably protect production.
+
+## 5.2 Prompt Test Suites
+
+Prompt test suites treat prompts as versioned behavior.
+
+They check:
+
+* output format
+* refusal behavior
+* tool call selection
+* groundedness
+* tone
+* policy compliance
+* task completion
+
+Prompt tests are not only for prompt engineers. In LLM systems, a prompt is production code. It deserves regression tests.
+
+## 5.3 A/B Tests
+
+A/B tests compare variants on live traffic.
+
+Typical variants:
+
+* old prompt vs new prompt
+* model A vs model B
+* retrieval strategy A vs B
+* different agent tool policies
+* different refusal messages
+
+Good A/B tests define:
+
+* primary metric
+* guardrail metrics
+* target population
+* sample size expectations
+* rollout and rollback rules
+* how to handle novelty effects and delayed outcomes
+
+The primary metric says what you are trying to improve. Guardrail metrics prevent "improvements" that create hidden damage. For example, a system might increase click-through rate by becoming more sensational, while factuality and user trust decline.
+
+## 5.4 Tracing Dashboards
+
+Tracing dashboards show what happened inside the system.
+
+For an LLM workflow, traces may include:
+
+* prompt template version
+* retrieved documents
+* model calls
+* token usage
+* tool calls
+* intermediate agent steps
+* validation failures
+* retries
+* final output
+* latency breakdown
+* costs
+* scores
+
+Tools and patterns:
+
+* OpenTelemetry spans
+* LangSmith traces
+* Langfuse traces
+* Honeycomb or Datadog dashboards
+* custom request logs
+* model gateway logs
+
+Metrics tell you that quality changed. Traces help you understand why.
+
+## 5.5 Scoring Pipelines
+
+Scoring pipelines turn raw outputs into structured evaluation results.
+
+They may include:
+
+* deterministic validators
+* regex or parser checks
+* schema validation
+* retrieval-grounding checks
+* judge model calls
+* human review queues
+* aggregation jobs
+* dashboards
+
+In production, scoring is often asynchronous. You may not want to block the user response while a judge model grades factuality. Instead, log the interaction, score it later, and feed the result into monitoring, training data, or review workflows.
+
+## 5.6 Judge Models
+
+Judge models are LLMs used to grade other LLM outputs.
+
+They are useful for:
+
+* factuality checks
+* helpfulness ratings
+* rubric scoring
+* pairwise preferences
+* style compliance
+* refusal quality
+
+They are risky because they can inherit bias, be fooled by fluency, prefer verbosity, miss domain errors, and drift when the judge model changes.
+
+Judge models should be treated as imperfect measurement instruments. Calibrate them against human labels. Track judge version. Use structured rubrics. Inspect disagreements. Avoid using the same model family as both generator and judge when correlation bias matters.
+
+### Practical judge-model caveats
+
+A judge model is useful when it is cheaper, faster, or more scalable than human review. It is dangerous when it becomes an unquestioned source of truth.
+
+Common failure patterns:
+
+* **verbosity bias:** longer answers look more thoughtful even when they are less precise.
+* **style bias:** polished prose gets higher scores than terse correct answers.
+* **authority bias:** confident hallucinations pass because they sound plausible.
+* **shared blind spots:** generator and judge from the same model family make similar mistakes.
+* **rubric drift:** small prompt changes alter score distributions.
+* **position bias:** in pairwise comparison, first or second answer is preferred independent of quality.
+
+A mature setup calibrates the judge:
+
+```text
+human-labeled calibration set
+  -> judge prompt / rubric
+  -> judge scores
+  -> disagreement analysis
+  -> rubric or prompt revision
+  -> locked judge version for release comparisons
+```
+
+Track judge agreement with humans by slice. A judge that is 90% aligned on easy support answers but 55% aligned on safety refusals should not gate safety releases.
+
+## 5.7 Rubric-Based Grading
+
+A rubric decomposes quality into dimensions.
+
+Example dimensions for a RAG answer:
+
+* answers the user's question
+* cites relevant sources
+* avoids unsupported claims
+* handles uncertainty
+* uses concise language
+
+Rubrics make qualitative judgment more consistent. They also make scores more actionable. "The answer got 3/5" is vague. "The answer was helpful but ungrounded" tells the engineer where to look.
+
+## 5.8 Data Labeling Workflows
+
+Labeling workflows turn raw examples into evaluation data.
+
+Important pieces:
+
+* sampling policy
+* annotation guidelines
+* reviewer training
+* calibration examples
+* multi-reviewer agreement
+* adjudication
+* label versioning
+* privacy controls
+
+Labeling is an engineering system, not just a data task. If labels are inconsistent, every metric built on top of them becomes questionable.
+
+## 5.9 Scorecards and Review Loops
+
+Teams often turn eval results into a scorecard rather than one scalar score.
+
+Example scorecard for a RAG support assistant:
+
+| Dimension | Scorer | Gate |
+| --------- | ------ | ---- |
+| JSON validity | deterministic parser | must be 100% |
+| Citation support | source-span checker + human spot check | no critical unsupported claims |
+| Helpfulness | judge model calibrated to human labels | no regression by more than 2% |
+| Safety/refusal | curated golden set | zero known critical failures |
+| Latency | tracing metric | p95 under target |
+| Cost | token + tool accounting | cost per successful case under budget |
+
+The scorecard matters because release decisions are multi-objective. A model can improve helpfulness while getting worse at citations, or reduce latency while increasing hallucinations.
+
+A review loop usually looks like:
+
+```text
+production trace sampled
+  -> automated scorers run
+  -> high-risk / low-confidence cases enter human review
+  -> labels and failure tags are stored
+  -> eval dataset is updated
+  -> product or prompt changes are tested against the updated suite
+```
+
+The practical rule: failures should not just be counted; they should become future test cases.
+
+---
+
+# 6. Metrics That Matter
+
+## 6.1 Task Success Rate
+
+Task success rate measures whether the system completed the user's intended task.
+
+It is often the most important product metric, but it can be hard to define.
+
+For a coding agent, success might mean:
+
+* tests pass
+* requested files changed
+* no unrelated edits
+* user accepts the result
+
+For customer support, success might mean:
+
+* user problem resolved
+* no escalation needed
+* answer followed policy
+* user did not reopen the ticket
+
+Task success should be grounded in real user value, not just model output quality.
+
+## 6.2 Exact Match and Structured Correctness
+
+Exact match is useful when there is a canonical answer.
+
+Examples:
+
+* classification label
+* extracted date
+* final numeric answer
+* selected option
+
+Structured correctness expands this idea to typed outputs:
+
+* valid JSON
+* schema compliance
+* required fields present
+* values in allowed ranges
+* tool arguments valid
+
+Exact match is brittle for free-form language. It is excellent for places where downstream software needs precise structure.
+
+## 6.3 Factuality and Hallucination Rate
+
+Factuality asks whether claims are true and supported.
+
+Hallucination rate measures unsupported or false claims.
+
+For RAG systems, factuality should often be measured against provided sources, not general world knowledge. A model may say something true but unsupported by the retrieved context. Depending on the product, that may still be a failure.
+
+Common scoring approaches:
+
+* claim extraction plus source support checks
+* human factuality review
+* judge model rubric
+* citation precision and recall
+* answerability checks
+
+Factuality metrics are hard but essential in trust-sensitive products.
+
+## 6.4 Tool Success Rate
+
+Tool success rate measures whether tool calls were correct and completed.
+
+Break it down:
+
+* chose the right tool
+* formed valid arguments
+* handled tool errors
+* interpreted tool results correctly
+* avoided unnecessary tool calls
+
+An agent can produce a fluent final answer while using the wrong tool or ignoring a failed tool call. Tool success metrics catch failures hidden by natural language.
+
+## 6.5 Latency
+
+Latency measures user wait time.
+
+Useful views:
+
+* p50 latency
+* p95 latency
+* p99 latency
+* time to first token
+* end-to-end completion time
+* per-step breakdown
+
+For LLM systems, latency comes from:
+
+* prompt length
+* output length
+* model size
+* retrieval
+* tool calls
+* retries
+* judge calls
+* orchestration
+
+Latency is a quality metric. A technically correct answer that arrives too late may fail the product.
+
+## 6.6 Cost
+
+Cost should usually be measured per useful outcome, not just per request.
+
+Examples:
+
+* cost per successful resolution
+* cost per accepted code change
+* cost per grounded answer
+* cost per human escalation avoided
+
+A more expensive model may be cheaper overall if it reduces retries, escalations, or manual review. A cheaper model may be more expensive if it fails more often.
+
+## 6.7 User Satisfaction
+
+User satisfaction captures subjective value.
+
+Signals:
+
+* thumbs up/down
+* rating
+* re-query rate
+* abandonment
+* retention
+* support escalation
+* qualitative feedback
+
+Satisfaction is important but easy to misread. Users may like answers that are confident and wrong. Users may dislike safe refusals that are correct. Satisfaction should be a product signal, not the only truth metric.
+
+## 6.8 Refusal Quality
+
+Refusal quality measures whether the system refuses when it should and helps when it can.
+
+Two failure classes matter:
+
+* under-refusal: answers unsafe or unsupported requests
+* over-refusal: refuses benign requests
+
+A good refusal:
+
+* identifies the boundary
+* avoids providing harmful content
+* offers safe alternatives where possible
+* is concise and respectful
+
+Refusal metrics should include both safety and usefulness. A system that refuses everything is safe but useless.
+
+## 6.9 Robustness and Variance
+
+Robustness measures stability under perturbation.
+
+Examples:
+
+* paraphrased inputs
+* different input order
+* longer context
+* irrelevant distractors
+* repeated stochastic runs
+* model version changes
+* tool latency or failure
+
+Variance matters because a system that succeeds 90% of the time on repeated runs can still be unacceptable for high-stakes tasks. For stochastic systems, evaluate multiple runs or run deterministically when possible.
+
+---
+
+# 7. Implementation Details
+
+## 7.1 Dataset Construction
+
+A good eval dataset is intentionally built.
+
+Sources:
+
+* production logs
+* user-reported failures
+* support escalations
+* manually written edge cases
+* synthetic variants
+* adversarial red-team prompts
+* domain expert examples
+
+Each example should include metadata:
+
+* task type
+* risk level
+* source
+* expected behavior
+* scoring method
+* relevant documents or tool fixtures
+* known failure category
+
+Do not treat the dataset as static. It should evolve with product usage and incidents.
+
+## 7.2 Golden Set Design
+
+A golden set is a high-quality, trusted benchmark used for release decisions.
+
+Properties:
+
+* carefully labeled
+* representative of critical workflows
+* includes edge cases
+* stable enough for version comparison
+* protected from prompt or model overfitting
+* reviewed when product policy changes
+
+Golden sets should not be the only eval data. If engineers repeatedly tune against the same golden set, it becomes less meaningful. Keep some holdout data and add fresh production samples.
+
+## 7.3 Test Case Generation
+
+Test generation expands coverage.
+
+Patterns:
+
+* paraphrase existing cases
+* generate boundary cases
+* vary entities, formats, and lengths
+* generate adversarial distractors
+* mutate tool responses
+* combine intents
+
+Generated tests should be filtered. A synthetic test with wrong expected behavior is worse than no test because it teaches the system and the team the wrong lesson.
+
+## 7.4 Eval Slicing
+
+Slicing means reporting metrics by subgroup.
+
+Useful slices:
+
+* task type
+* input length
+* language
+* customer tier
+* data source
+* retrieval confidence
+* model version
+* tool path
+* risk category
+* failure type
+
+Slicing turns one vague number into a map of system behavior. It also reveals fairness and reliability issues that aggregate scores hide.
+
+## 7.5 Confidence Intervals and Uncertainty Intuition
+
+Every metric estimated from samples has uncertainty.
+
+If 87 out of 100 examples pass, the observed pass rate is 87%. But the true pass rate over the whole production distribution is not exactly known. With only 100 examples, a few examples can move the score noticeably.
+
+The intuition:
+
+* larger sample sizes reduce uncertainty
+* metrics near 50% have more variance than metrics near 0% or 100%
+* small score deltas may be noise
+* sliced metrics need enough examples per slice
+* repeated stochastic runs reveal model variance
+
+You do not always need to compute formal statistics in an interview, but you should mention uncertainty. A mature answer says:
+
+> I would avoid overreacting to tiny changes unless the sample size is large enough and the slice is important.
+
+Two practical techniques are often enough for system-design conversations:
+
+* **Bootstrap intervals:** resample the eval cases many times, recompute the metric, and report the range. This is useful when the metric is not a simple accuracy number.
+* **Minimum detectable effect intuition:** ask how large a change the eval has enough data to detect. If a slice has 25 examples, it cannot reliably distinguish a tiny regression from noise.
+
+For high-risk slices, uncertainty should make you more careful, not less. A small slice with possible tenant leakage, unsafe tool use, or account-lockout regression deserves more review even if the confidence interval is wide.
+
+## 7.6 Score Aggregation
+
+Aggregation combines many measurements into a decision.
+
+Simple averaging is often wrong because not all failures have equal cost.
+
+Better aggregation patterns:
+
+* separate quality, safety, latency, and cost metrics
+* use weighted scores only when weights reflect product risk
+* require hard gates for critical failures
+* report slices next to aggregate scores
+* track confidence intervals
+* compare candidate vs baseline, not candidate alone
 
 For example:
 
 ```text
-model used by few users
-  -> pretraining cost may dominate
-
-model used by millions of users
-  -> inference cost can dominate lifetime economics
+Ship only if:
+- task success does not regress more than 1%
+- hallucination rate improves or stays flat
+- critical safety cases have zero known failures
+- p95 latency stays under 3 seconds
+- cost per successful task stays within budget
 ```
 
-This explains why production teams care about:
+This is better than a single "eval score" because release decisions are multi-objective.
 
-* smaller active parameter counts,
-* MoE sparsity,
-* distillation,
-* quantization,
-* long-context efficiency,
-* output length control,
-* routing easy requests to cheaper models,
-* training more if it reduces inference cost or improves task success.
+## 7.7 Concrete Eval Harness Shape
 
-The model is not just a checkpoint. It is a capital asset that must be amortized through deployment.
-
-## 4.7 Online Learning
-
-Online learning updates behavior as new data arrives.
-
-In strict online learning, the model or policy updates continuously or frequently from production interactions. In many production ML systems, "online learning" is softened into frequent retraining, bandit updates, canary evaluation, or reranking updates rather than immediate LLM weight updates.
-
-Online learning is common in:
-
-* recommendation ranking
-* ads bidding
-* search ranking
-* personalization
-* fraud and abuse detection
-* contextual bandits
-
-For LLMs, full online weight updates are less common because safety, regression risk, and infrastructure cost are high. More common patterns include:
-
-* updating retrieval indexes
-* updating prompts or policies
-* updating rerankers
-* collecting preference data for batch post-training
-* using bandits to choose among model variants
-
-## 4.8 Continual Learning
-
-Continual learning means updating a model over time while preserving previous capabilities.
-
-The challenge is catastrophic forgetting. A model fine-tuned on new data may improve on recent tasks while losing older skills, safety behavior, language ability, or domain coverage.
-
-Common mitigation patterns:
-
-* mix old and new data during training
-* keep a replay buffer
-* evaluate broad regression suites
-* use small adapter updates where appropriate
-* freeze parts of the model
-* gate updates by capability and safety evals
-* track per-domain performance, not only aggregate metrics
-
-Continual learning is not just "train again." It is controlled change management for model behavior.
-
-## 4.9 Self-Improvement Loops
-
-A self-improvement loop uses the model or system to generate training candidates, critique outputs, solve tasks, create synthetic data, or propose refinements.
-
-Examples:
-
-* generate multiple candidate answers and keep the one that passes tests
-* use an LLM judge to label preference pairs
-* use execution results to create verified code examples
-* ask a stronger model to critique a weaker model
-* mine failure traces and turn them into training cases
-
-The danger is feedback contamination. If the model generates flawed data and then trains on it without independent validation, the system can amplify its own biases and mistakes.
-
-Self-improvement loops need external anchors:
-
-* human review
-* deterministic tests
-* trusted datasets
-* safety filters
-* held-out evaluations
-* production outcome checks
-
-## 4.10 Learning Loop Operations
-
-The algorithm is only one part of the learning loop. In deployed systems, most of the work is operational:
-
-* deciding which traces are eligible for training
-* redacting or excluding sensitive data
-* collecting labels or preferences with clear instructions
-* measuring annotator disagreement
-* sampling edge cases instead of only high-volume cases
-* converting failures into regression tests
-* promoting updates through offline evals, canaries, and rollback plans
-
-A mature loop usually has separate ownership for data policy, labeling quality, training, evaluation, deployment, and incident response. If those responsibilities are blurred, a "learning" system can quietly absorb noisy feedback, private content, or product incentives that conflict with correctness.
-
-The economic question matters too. Some improvements are cheaper as prompt changes, retrieval fixes, tool validation, or model routing. Post-training is worth the cost when the desired behavior is broad, repeated, and hard to enforce at runtime.
-
----
-
-# 5. Common Technologies and Patterns
-
-## Reward Models
-
-Reward models are usually transformer-based classifiers or regressors trained over prompt-response pairs. They may produce a scalar quality score, safety score, helpfulness score, or domain-specific score.
-
-In production, reward models are often used for:
-
-* training signal in RLHF
-* offline ranking of candidate responses
-* rejection sampling
-* safety scoring
-* evaluation dashboards
-
-## Preference Datasets
-
-Preference datasets contain examples of chosen and rejected outputs.
-
-Useful fields include:
-
-* prompt
-* chosen response
-* rejected response
-* label source
-* labeler agreement
-* task category
-* safety category
-* model versions that produced candidates
-* timestamp and sampling settings
-
-Metadata matters because preference data ages. A preference from an old policy, old UI, or old safety policy may not match the current product.
-
-## RL Training Loops
-
-An RL training loop typically has:
-
-* rollout generation
-* reward scoring
-* advantage estimation
-* policy update
-* reference-policy regularization
-* evaluation
-* checkpointing
-
-For LLMs, these loops are expensive because rollouts are token-heavy and model updates require large GPU workloads. That is why teams often use offline preference optimization, rejection sampling, or smaller rerankers before full RL.
-
-## Offline and Online Bandits
-
-Bandits handle decisions where actions produce observable reward but full long-horizon RL is unnecessary.
-
-Examples:
-
-* choosing which prompt template to use
-* choosing among model variants
-* selecting a ranking strategy
-* routing traffic between answer styles
-* choosing retrieval depth
-
-Offline bandit evaluation tries to estimate policy performance from logged data. Online bandits allocate live traffic while balancing exploration and exploitation.
-
-## Trajectory Logging
-
-Trajectory logging is the instrumentation layer that makes learning possible.
-
-Without logs, feedback cannot be attributed. You need the prompt, context, model version, output, tool calls, latency, filters, user action, and outcome. This is also the bridge from Chapter 4 evaluation to Chapter 5 learning: eval cases often come from logged failures.
-
-## Rejection Sampling and Reranking
-
-Rejection sampling generates multiple candidates, scores them, and keeps the best acceptable one.
-
-Reranking is similar: generate or retrieve candidates, score them with a model or heuristic, and return the top result.
-
-These patterns improve behavior without changing policy weights. They are often cheaper and safer than immediate retraining, but they add inference cost and depend on scorer quality.
-
-## Post-Training Pipelines
-
-A mature post-training pipeline includes:
-
-* data ingestion
-* cleaning and deduplication
-* labeling
-* dataset versioning
-* training
-* offline evaluation
-* safety evaluation
-* red-team testing
-* staged rollout
-* monitoring
-* rollback
-
-This is software engineering around optimization. The model update is only one step.
-
----
-
-# 6. Implementation Details
-
-## 6.1 Data Collection
-
-Collect the full decision context, not just the final answer.
-
-For an LLM product, useful records include:
-
-* user request after privacy filtering
-* retrieved documents or tool observations
-* prompt template version
-* model and checkpoint version
-* sampling parameters
-* candidate outputs
-* final selected output
-* validation results
-* user feedback
-* downstream outcome
-* safety filter results
-
-Data collection must also handle privacy, retention, consent, and security. A training pipeline that leaks sensitive user data into future models is a production incident, not a model improvement.
-
-## 6.2 Preference Labeling
-
-Preference labels are easier to collect than perfect demonstrations, but they are not free.
-
-Good labeling workflows define:
-
-* what "better" means
-* how to handle factuality vs helpfulness vs tone
-* when safety overrides user preference
-* how to break ties
-* how to measure labeler agreement
-* how to audit label quality
-
-For high-stakes domains, labels often need expert review. For low-stakes domains, crowd labels or LLM-assisted labels may be acceptable if validated against trusted samples.
-
-## 6.3 Reward Estimation
-
-Reward can come from:
-
-* direct environment outcome
-* human labels
-* learned reward model
-* deterministic verifier
-* heuristic score
-* LLM judge
-* blended score
-
-The safest systems avoid pretending that one reward captures everything. They often maintain separate scores for helpfulness, correctness, safety, policy compliance, latency, and user satisfaction. The update gate can then require that no critical dimension regresses.
-
-## 6.4 Gated Policy Updates
-
-A gated update process asks:
+A real eval harness needs more than a loop over examples. It needs stable inputs, reproducible system configuration, scorers, traces, and comparison logic.
 
 ```text
-Should this candidate policy be allowed to change production behavior?
+eval_cases.jsonl
+  -> load case + metadata
+  -> run candidate system
+  -> run baseline system (optional)
+  -> collect trace
+  -> run deterministic scorers
+  -> run judge scorers
+  -> aggregate by slice
+  -> compare candidate to baseline
+  -> emit report and release gate
 ```
 
-Useful gates:
+A useful case record contains:
 
-* offline benchmark improvement
-* no regression on critical tasks
-* safety eval pass
-* privacy and compliance checks
-* human review for risky behavior changes
-* canary success
-* rollback readiness
+```json
+{
+  "id": "refund_042",
+  "task_type": "refund_policy",
+  "input": "Can I get a refund after 45 days?",
+  "expected_behavior": "Explain policy exception rules and ask for order date.",
+  "risk_level": "medium",
+  "fixtures": {"retrieved_docs": ["refund_policy_v3"]},
+  "scorers": ["groundedness", "helpfulness", "policy_compliance"]
+}
+```
 
-The update should be reversible. In production, the ability to roll back a model or route traffic away from a bad policy is part of the learning system.
+The harness should record:
 
-## 6.5 Safety Maintenance
+* model and prompt version,
+* retrieval index version,
+* tool fixture version,
+* sampling parameters,
+* full trace or trace pointer,
+* raw output,
+* scorer outputs,
+* final pass/fail or score.
 
-Safety is not a one-time filter. It must be maintained across updates.
+Without versioning, you cannot explain why yesterday's eval result differs from today's. Without traces, you cannot debug which stage caused the regression.
 
-Policy updates can accidentally weaken refusals, increase confident hallucinations, leak private information, or make unsafe tool calls. A post-training pipeline needs safety datasets, adversarial tests, red-team prompts, policy-specific evaluations, and monitoring for novel failures.
+## 7.8 Human Review Operations
 
-The key rule:
+Human review is most valuable when it is targeted.
+
+Do not send random outputs to reviewers forever. Sample intentionally:
+
+* high-risk categories,
+* low-confidence judge scores,
+* large model-vs-baseline disagreements,
+* user-reported failures,
+* new product flows,
+* slices with high variance,
+* cases near release thresholds.
+
+Reviewers need:
+
+* a written rubric,
+* examples of good and bad labels,
+* a way to mark ambiguity,
+* an escalation path for unclear policy,
+* periodic calibration sessions,
+* disagreement adjudication.
+
+The output of review should be structured:
 
 ```text
-Never let a quality reward silently override safety constraints.
+label + severity + failure category + free-text note + source evidence
 ```
 
-## 6.6 Continual-Learning Risks
-
-Continual learning can go wrong when recent data dominates older invariants.
-
-Examples:
-
-* a support bot learns from angry users and becomes overly apologetic
-* a coding assistant overfits to one team's style and regresses general Python ability
-* a retrieval system promotes popular but outdated documents
-* an agent learns shortcuts that pass shallow tests but fail real tasks
-* a model absorbs private or low-quality user text
-
-The fix is not to avoid learning. The fix is to make updates explicit, measured, versioned, and gated.
+That structure lets failures become dashboards, eval slices, and training data.
 
 ---
 
-# 7. Tradeoffs
+# 8. Tradeoffs
 
-## 7.1 Latency
+## 8.1 Correctness vs Cost
 
-Learning loops can improve future quality but add current latency.
+More evaluation costs more money and time. Judge models, human labels, repeated stochastic runs, and large test suites can be expensive.
 
-Reranking, rejection sampling, reward scoring, and multi-candidate generation all require extra inference. Online bandits may add routing complexity. Full RL does not usually affect request latency directly during training, but the resulting policy may be larger, slower, or require additional safety checks.
+The right question is not "how do we evaluate everything?" It is:
 
-## 7.2 Cost
+What failures are expensive enough to justify stronger evaluation?
 
-Costs come from:
+High-risk flows need deeper evals. Low-risk copy suggestions may only need lightweight regression tests and online monitoring.
 
-* human labeling
-* rollout generation
-* reward model training
-* policy training
-* evaluation suites
-* storage for trajectories
-* serving extra candidates or scorers
+## 8.2 Speed vs Confidence
 
-Preference optimization is often chosen because it can be cheaper and simpler than full online RL. Reranking is often chosen because it improves behavior without changing weights, but it increases per-request inference cost.
+Fast evals are useful in development and CI. Slow evals are useful before launches.
 
-## 7.3 Reliability
+A practical stack often has layers:
 
-Static models are easier to reason about than models that change. Every update creates regression risk.
+* quick smoke tests on every prompt change
+* medium regression suite in CI
+* larger offline benchmark before release
+* online canary after release
+* periodic human review
 
-Learning systems need versioning, reproducibility, eval gates, rollback, and monitoring. Without those, "the model is learning" becomes an explanation for unpredictable behavior rather than a controlled improvement mechanism.
+This gives developers fast feedback without pretending a small test suite proves production readiness.
 
-## 7.4 Correctness
+## 8.3 Automation vs Judgment
 
-User preference is not the same as correctness. People may prefer confident, fluent, or agreeable answers even when they are wrong.
+Automated evals scale. Human judgment catches nuance.
 
-For correctness-sensitive tasks, preference signal should be combined with ground-truth checks, retrieval grounding, tests, expert review, or deterministic verifiers.
+Use automation for:
 
-## 7.5 Scaling
+* schema checks
+* exact correctness
+* known failure patterns
+* broad regression coverage
+* continuous monitoring
 
-At small scale, manually inspecting bad outputs and fine-tuning occasionally may work. At large scale, teams need automated logging, dataset pipelines, labeling operations, training jobs, eval dashboards, canaries, and rollback infrastructure.
+Use humans for:
 
-The organizational complexity can exceed the modeling complexity.
+* ambiguous quality
+* policy interpretation
+* expert factuality
+* new failure discovery
+* judge calibration
 
-## 7.6 Operational Complexity
+The best systems combine both.
 
-Learning loops create dependencies across product, data, ML, infra, safety, legal, and support teams.
+## 8.4 Stability vs Adaptation
 
-You need clear ownership for:
+A stable benchmark enables version comparison. An adaptive benchmark catches new failures.
 
-* what data can be used
-* what labels mean
-* what metrics decide promotion
-* who approves risky updates
-* how incidents are handled
-* how users can opt out where required
+You need both:
+
+* stable golden set for longitudinal tracking
+* fresh sampled data for distribution shift
+* incident-derived tests for known regressions
+* holdout sets to reduce overfitting
+
+## 8.5 Aggregate Metrics vs Debuggability
+
+Executives want a single number. Engineers need failure examples.
+
+A good evaluation report gives both:
+
+* headline metrics
+* slice breakdowns
+* representative failures
+* trace links
+* changes from baseline
+* release recommendation
+
+The score should point engineers toward the next debugging action.
 
 ---
 
-# 8. Failure Modes
+# 9. Failure Modes
 
-## 8.1 Reward Hacking
+## 9.1 Misleading Metrics
 
-Reward hacking happens when the policy finds behavior that maximizes reward without satisfying the real goal.
+A metric is misleading when it improves while user value worsens.
 
 Examples:
 
-* writing verbose answers because the reward model associates length with quality
-* adding citations that look real but are not grounded
-* refusing too often because refusals avoid unsafe mistakes
-* optimizing for clicks with misleading titles
-* passing shallow tests while hiding deeper errors
+* measuring answer length instead of helpfulness
+* measuring thumbs-up without factuality
+* measuring exact match for a task with many valid phrasings
+* measuring average success while high-risk cases regress
+* measuring tool call count and accidentally rewarding unnecessary tools
 
-The fix is better reward design, adversarial evaluation, multiple metrics, human audits, and conservative update gates.
+A metric is worse than useless when it actively drives the team toward bad behavior. For example, optimizing a support bot for fewer escalations can make it avoid escalation even when a human is needed.
 
-## 8.2 Misgeneralized Preferences
+## 9.2 Benchmark Overfit
 
-A model can learn the wrong abstraction from preference data.
+Benchmark overfit happens when the system improves on the eval set without improving real behavior.
 
-If labelers prefer polite responses, the model may overgeneralize into excessive flattery. If labelers prefer confident answers, the model may become more confidently wrong. If labels reward concise answers, the model may omit necessary caveats.
+Causes:
 
-This is Chapter 0 generalization under a preference-shaped objective. The model learns patterns that reduce training loss, not necessarily the human concept you intended.
+* repeated tuning against the same examples
+* prompt examples copied from test cases
+* model trained on benchmark data
+* synthetic tests too similar to generator patterns
+* engineers learning benchmark quirks
 
-## 8.3 Catastrophic Forgetting
+Mitigations:
 
-Catastrophic forgetting occurs when new training damages old capabilities.
+* holdout sets
+* fresh production samples
+* private evals
+* rotate some tests
+* inspect real failures
+* measure online outcomes
 
-A model fine-tuned on customer support transcripts might become better at support tone but worse at reasoning. A domain-specific update might improve one product area and degrade safety refusals elsewhere.
+## 9.3 Eval Leakage
 
-Mitigations include replay data, broad eval suites, regularization, adapters, frozen layers, and staged rollout.
+Eval leakage occurs when test answers or patterns leak into the system being evaluated.
 
-## 8.4 Distribution Drift
+Examples:
 
-The world changes, users change, products change, and the model itself changes which data gets observed.
+* putting golden examples into the prompt
+* training on eval data
+* retrieving eval answers from a vector store
+* judge prompt revealing expected answers
+* developers manually special-casing known cases
 
-A reward model trained on old outputs may not score new outputs correctly. A preference dataset from one user segment may not generalize to another. A policy optimized under one UI may fail under a redesigned UI.
+Leakage makes the score untrustworthy because the evaluation no longer measures generalization.
 
-Learning loops need drift monitoring and periodic revalidation.
+## 9.4 Judge Bias
 
-## 8.5 Style Over Substance
+Judge models have biases.
 
-Preference optimization often rewards surface features:
+They may prefer:
 
+* longer answers
 * confident tone
-* helpful phrasing
-* clean formatting
-* apparent reasoning
-* pleasing brevity
+* familiar model style
+* their own model family's outputs
+* safe-sounding but unhelpful responses
+* plausible explanations over correct reasoning
 
-These features are not bad, but they can crowd out truth, depth, and calibrated uncertainty. A model can become more satisfying while becoming less correct.
+Mitigations:
 
-## 8.6 Feedback Loops from Bad Data
+* calibrate against human labels
+* use pairwise judging with randomized order
+* use clear rubrics
+* track judge versions
+* inspect judge disagreements
+* use deterministic validators where possible
 
-If the system trains on biased, spammy, adversarial, or model-generated data, the next policy may produce more of the same.
+## 9.5 Synthetic Mismatch
 
-Examples:
+Synthetic tests may not match real users.
 
-* a recommender learns from clickbait clicks and shows more clickbait
-* an assistant learns from unverified thumbs-up feedback
-* a code model trains on generated code that only appears correct
-* an agent learns from traces where bad tool calls were not labeled
+They can be:
 
-The defense is data filtering, source weighting, held-out trusted evals, and explicit review of data entering training.
+* too clean
+* too verbose
+* too balanced
+* too easy
+* biased toward the generating model
+* missing messy production context
+
+Synthetic evals are best used for coverage expansion, not as the sole source of truth.
+
+## 9.6 Blind Spots
+
+Every eval suite has blind spots.
+
+Common blind spots:
+
+* rare but catastrophic failures
+* long-tail user intents
+* multilingual users
+* accessibility needs
+* tool outages
+* adversarial behavior
+* delayed user dissatisfaction
+* data freshness issues
+
+The goal is not perfect coverage. The goal is to continuously shrink the unknown failure surface.
 
 ---
 
-# 9. What to Say in an Interview
+# 10. What to Say in an Interview
 
-For a learning-loop question, start with the objective and feedback source:
+When asked how you would evaluate an LLM system, start from the product objective.
+
+A strong answer:
+
+1. Defines the task and failure costs.
+2. Separates objective correctness from subjective quality.
+3. Builds a golden set from representative and high-risk cases.
+4. Uses deterministic checks where possible.
+5. Uses judge models or humans for qualitative dimensions.
+6. Slices metrics by task, cohort, risk, and input shape.
+7. Compares candidate vs baseline with uncertainty.
+8. Adds regression tests for production failures.
+9. Uses online A/B tests or canaries to validate real impact.
+10. Monitors traces, cost, latency, and safety after launch.
+
+For example:
+
+> I would not rely on one aggregate score. I would build a layered eval: exact validators for structured outputs, source-grounded factuality checks for RAG answers, rubric-based judge or human scoring for helpfulness, regression tests for known failures, and online metrics like task completion and escalation rate. I would slice results by intent, risk level, input length, and retrieval quality, then use hard gates for safety and correctness.
+
+That answer shows production judgment.
+
+---
+
+# 11. Takeaways
+
+Evaluation is not just measuring model accuracy. It is building a trustworthy feedback system around a probabilistic product.
+
+The core primitives are:
+
+* metrics compress behavior
+* ground truth defines comparison
+* signal vs noise determines trust
+* distributions reveal hidden regressions
+* labels and preferences encode quality
+
+The core engineering pattern is:
 
 ```text
-I would first define what behavior we want, what feedback can measure it, and how trustworthy that feedback is.
+datasets + runners + scorers + slices + uncertainty + release policy
 ```
 
-Then separate the options:
+Strong evaluation systems are layered. They combine offline tests, online experiments, regression suites, adversarial probes, synthetic cases, and human judgment.
 
-* Use SFT when you have demonstrations of desired behavior.
-* Use preference optimization when ranking outputs is easier than writing ideal outputs.
-* Use RLHF when you need to optimize against a learned reward signal and can afford the complexity.
-* Use bandits when choosing among actions or variants with measurable online reward.
-* Use continual learning only with strong regression and safety gates.
-
-Then explain the safety layer:
-
-```text
-I would not let raw user feedback update the model directly. I would log trajectories, clean and label data, train or score candidates offline, run evals, gate updates, canary, monitor, and keep rollback available.
-```
-
-High-signal phrases:
-
-* "Reward is a proxy, so I would design against reward hacking."
-* "Preference data shapes behavior but can overfit to style."
-* "The current policy controls the data distribution, so the loop can bias itself."
-* "I would treat model updates like production releases."
-* "Continual learning needs replay or regression coverage to avoid forgetting."
+The most common mistake is treating an eval score as truth. A score is evidence. Good engineers ask where it came from, what it misses, how uncertain it is, and whether it maps to user value.
 
 ---
 
-# 10. Takeaways
+# 12. What Comes Next
 
-Learning loops convert feedback into future behavior.
+Evaluation produces the signal that learning systems consume.
 
-The core primitives are reward, policy, value, advantage, feedback, exploration, and trajectory data. They compose into a loop where behavior creates data, data creates signal, signal creates updates, and updates create new behavior.
+Once you can measure quality, you can decide which examples matter, which failures should become training data, which preferences should update a policy, and which feedback loops are safe to automate.
 
-The engineering challenge is controlling that loop. Good systems collect rich trajectories, separate raw feedback from trusted reward, use preference or reward modeling carefully, gate policy updates, maintain safety, and monitor drift.
+Chapter 5 builds on this by asking:
 
-The Chapter 0 lesson still applies: optimization amplifies the objective. In Chapter 5, the objective may come from humans, users, tools, tests, or production outcomes. If that signal is wrong, the model does not merely make mistakes; it learns them.
+How does usage data become better behavior over time?
 
----
-
-# 11. Bridge to Production Serving
-
-Once a model can change, serving becomes more than inference.
-
-Production serving must answer:
-
-* which model version should receive this request?
-* how do we compare the new policy to the old one?
-* how do we canary, monitor, and roll back?
-* how do we keep latency and cost acceptable?
-* how do we prevent training data from leaking private information?
-* how do we detect regressions after deployment?
-
-Chapter 6 moves from learning loops to production ML systems: model serving, deployment, monitoring, scaling, incident response, and operating changing models reliably.
+[Chapter 13](../chapter_13/guide.html) extends evaluation into infrastructure. A candidate release can improve answer quality while worsening p99 latency, KV-cache pressure, GPU utilization, or cost per task. Good eval gates include systems slices such as prompt length, output length, model route, queue time, prefill time, decode time, and tenant class.

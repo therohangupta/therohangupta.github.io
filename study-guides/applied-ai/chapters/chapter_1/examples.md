@@ -1,20 +1,15 @@
 ---
 layout: page
-title: "LLM Engineering Code Examples"
+title: "Chapter 1 Examples: LLM Architecture and Inference Fundamentals"
 guide_type: examples
 ---
-# LLM Engineering Code Examples
 
-These examples accompany the [LLM Engineering guide](guide.html). Use the raw links to download or run them locally.
+# Chapter 1 Examples
+
+These examples accompany the [LLM Architecture and Inference Fundamentals guide](guide.html).
 
 ---
 
-{% include code-example.html title="Json Schema Validation" path="examples/json_schema_validation.py" language="python" %}
+{% include code-example.html title="Attention Sketch" path="examples/attention_sketch.py" language="python" %}
 
-{% include code-example.html title="Orchestrator" path="examples/orchestrator.py" language="python" %}
-
-{% include code-example.html title="Prompt Template" path="examples/prompt_template.py" language="python" %}
-
-{% include code-example.html title="Retry Validation" path="examples/retry_validation.py" language="python" %}
-
-{% include code-example.html title="Tool Calling Loop" path="examples/tool_calling_loop.py" language="python" %}
+{% include code-example.html title="KV Cache Decode" path="examples/kv_cache_decode.py" language="python" %}

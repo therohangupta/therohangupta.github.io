@@ -1,20 +1,33 @@
 ---
 layout: page
-title: "Agents Code Examples"
+title: "Chapter 3 Examples: Retrieval and Memory Systems"
 guide_type: examples
 ---
-# Agents Code Examples
 
-These examples accompany the [Agents guide](guide.html). Use the raw links to download or run them locally.
+# Chapter 3 Examples
+
+These examples accompany the [Retrieval and Memory Systems guide](guide.html). Use the raw links to download or run them locally.
 
 ---
 
-{% include code-example.html title="Async Execution" path="examples/async_execution.py" language="python" %}
+{% include code-example.html title="Chunking Strategy Demo" path="examples/chunking_strategy_demo.py" language="python" %}
 
-{% include code-example.html title="Human Approval" path="examples/human_approval.py" language="python" %}
+{% include code-example.html title="Faiss Hnsw Style Retrieval" path="examples/faiss_hnsw_style_retrieval.py" language="python" %}
 
-{% include code-example.html title="Planner Executor" path="examples/planner_executor.py" language="python" %}
+{% include code-example.html title="Hybrid Bm25 Dense" path="examples/hybrid_bm25_dense.py" language="python" %}
 
-{% include code-example.html title="React Loop" path="examples/react_loop.py" language="python" %}
+{% include code-example.html title="Memory Gating Policy" path="examples/memory_gating_policy.py" language="python" %}
 
-{% include code-example.html title="State Machine Agent" path="examples/state_machine_agent.py" language="python" %}
+{% include code-example.html title="Memory Write Read Update" path="examples/memory_write_read_update.py" language="python" %}
+
+{% include code-example.html title="Metadata Filtering" path="examples/metadata_filtering.py" language="python" %}
+
+{% include code-example.html title="Query Rewriting" path="examples/query_rewriting.py" language="python" %}
+
+{% include code-example.html title="Reranking Pipeline" path="examples/reranking_pipeline.py" language="python" %}
+
+{% include code-example.html title="Retrieval Evaluation" path="examples/retrieval_evaluation.py" language="python" %}
+
+{% include code-example.html title="Resume Retrieval: Chunk Evidence to Candidate Ranking" path="examples/resume_retrieval_design.md" language="markdown" %}
+
+{% include code-example.html title="RAG Trace Debugging Artifact" path="examples/rag_trace_debugging.md" language="markdown" %}

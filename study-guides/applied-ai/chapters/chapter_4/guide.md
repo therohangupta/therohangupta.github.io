@@ -1,16 +1,25 @@
 ---
 layout: page
-title: "Chapter 4: Evaluation Systems"
+title: "Chapter 4: Agents"
 guide_type: chapter
 ---
 
-Evaluation systems answer a deceptively simple question:
+# Chapter 4 — Agents
 
-Does the AI system actually work?
+Agents are the layer where LLMs become product actors.
 
-For LLM products, that question is harder than it sounds. The output is probabilistic, the task may be subjective, users may care about different failure modes, and a change that improves one cohort can silently hurt another.
+Chapter 0 gave the primitives for probability, optimization, information flow, and decision-making. Chapter 1 showed how to control an LLM at runtime. Chapter 2 introduced retrieval and memory as external context. This chapter composes those pieces into systems that can plan, call tools, observe results, update state, and decide what to do next.
 
-This chapter explains how to measure quality, reliability, regressions, and product outcomes in AI systems. The interview signal is not whether you know a list of metrics. It is whether you can design an evaluation system that catches real failures before users do.
+The interview signal is not "can you name agent frameworks." It is:
+
+* can you define the control loop?
+* can you bound the action space?
+* can you explain how errors compound over time?
+* can you decide when an autonomous workflow is worse than a guided workflow?
+* can you design the operational guardrails that make the system safe to ship?
+* can you keep model decisions separate from tool authorization?
+
+Security note: agents are where prompt and retrieval failures can become real actions. For the deeper treatment of least-privilege tools, approval gates, audit logs, prompt injection, and tool-output injection, see [Chapter 8: Security, Privacy, and Trust Boundaries](../chapter_8/guide.html). For a full platform design, see the [Secure Agent Platform capstone](../../capstones/secure_agent_platform.html).
 
 ---
 
@@ -23,1207 +32,856 @@ This chapter explains how to measure quality, reliability, regressions, and prod
 
 # 1. The Core Mental Model
 
-An evaluation system is a feedback instrument.
-
-It observes an AI system, compares behavior against some definition of quality, and turns that comparison into a signal engineers can act on.
-
-The simple version is:
+An agent is a controlled loop:
 
 ```text
-inputs -> AI system -> outputs -> scorer -> metrics -> decisions
+state -> decide -> act -> observe -> update state -> stop or continue
 ```
 
-The production version is:
+The LLM is usually the decision component, not the entire system. The agent also needs state, tools, policies, budgets, validators, queues, logs, permissions, and stopping rules.
+
+A useful way to describe an agent is:
 
 ```text
-real traffic + curated datasets + adversarial cases
-        -> model / prompt / retriever / agent / tool system
-        -> traces + outputs + costs + user outcomes
-        -> automated checks + model judges + human review
-        -> sliced metrics + uncertainty + regression gates
-        -> ship / block / rollback / improve
+Agent = policy + state + tools + environment + control loop
 ```
 
-The key shift is this:
+Where:
 
-Evaluation is not a single score. It is a system for producing trustworthy evidence.
+* **policy** decides what action to take
+* **state** records what the system currently knows
+* **tools** let the agent affect the world
+* **environment** returns observations
+* **control loop** decides whether to continue, retry, escalate, or stop
 
-For deterministic software, a unit test often has a crisp pass/fail result. For LLM systems, correctness can be graded, contextual, stochastic, or user-dependent. You usually need a layered evaluation stack:
-
-* exact checks for structured outputs
-* reference-based checks for known-answer tasks
-* rubric grading for qualitative tasks
-* human review for ambiguous or high-risk cases
-* online metrics for real user impact
-* tracing to explain why the score moved
-
-A strong evaluation system does not eliminate uncertainty. It makes uncertainty visible enough to make better engineering decisions.
+This makes agents look less like magic and more like a production control system with an LLM inside it.
 
 ---
 
-# 2. Core Primitives
+# 2. Purpose: Why Agents Exist
 
-## 2.1 Metrics
-
-A metric is a compressed measurement of behavior.
+Agents exist because many useful product tasks are not single-turn text transformations.
 
 Examples:
 
-* task success rate
-* exact match
-* hallucination rate
-* p95 latency
-* cost per successful task
-* user thumbs-up rate
-* refusal correctness
-* tool success rate
+* answering a support ticket may require reading account data, checking logs, drafting a reply, and escalating if confidence is low
+* fixing a code issue may require inspecting files, editing code, running tests, and revising based on failures
+* booking travel may require searching options, comparing constraints, asking for approval, and executing a purchase
+* researching a company may require search, extraction, synthesis, citation checking, and report generation
 
-Metrics are useful because they make change measurable. They are dangerous because compression hides context.
+The common structure is sequential decision-making under uncertainty. The system does not know all required steps in advance. It must choose actions based on intermediate observations.
 
-If a support bot's average satisfaction score rises, that sounds good. But if satisfaction improved for easy billing questions while emergency account-lockout cases got worse, the average metric is hiding the most important regression.
+Agents are useful when:
 
-Good metrics should be:
+* the task has multiple dependent steps
+* the system needs tools or external state
+* the correct path depends on observations
+* partial progress can be evaluated
+* the action space can be bounded
+* failures can be detected and contained
 
-* aligned with user value
-* sensitive to meaningful regressions
-* hard to game accidentally
-* interpretable by engineers
-* sliceable by task, user cohort, input type, model version, and failure class
-
-The best interview answer is rarely "use accuracy." It is usually "what does success mean for this product, and what failure would hurt users most?"
-
-## 2.2 Ground Truth
-
-Ground truth is the reference you compare against.
-
-For some tasks, ground truth is objective:
-
-* extracted invoice total
-* selected database row
-* generated JSON schema validity
-* answer to a math problem
-* tool call name and arguments
-
-For other tasks, ground truth is partial or subjective:
-
-* "good summary"
-* "helpful answer"
-* "safe refusal"
-* "faithful explanation"
-* "high-quality recommendation"
-
-LLM evaluation often operates with imperfect ground truth. That does not mean you give up. It means you choose the strongest available reference:
-
-* exact expected answer where possible
-* accepted answer sets for equivalent outputs
-* structured validators for machine-readable tasks
-* source documents for factuality
-* rubrics for qualitative judgment
-* preference comparisons for subjective quality
-* human adjudication for ambiguous cases
-
-Ground truth is also expensive. Labeling takes time, expert attention, and policy consistency. A small, high-quality golden set is often more valuable than a huge noisy benchmark.
-
-## 2.3 Signal vs Noise
-
-Evaluation is a signal-processing problem.
-
-Signal is the part of the measurement that reflects true system quality. Noise is everything that makes the measurement unstable or misleading.
-
-Common sources of noise:
-
-* stochastic model sampling
-* ambiguous prompts
-* inconsistent human labels
-* flawed judge prompts
-* distribution shift between benchmark and production
-* small sample sizes
-* flaky tools
-* transient latency spikes
-* hidden changes in retrieved context
-
-If one prompt revision improves the score from 81.0% to 81.4%, that may be a real improvement, or it may be noise. If the evaluation set has 50 examples, the difference is probably not meaningful. If it has 10,000 examples and the improvement is concentrated in a high-value slice, it may matter.
-
-The practical habit is to ask:
-
-* How many examples produced this number?
-* How variable is the score across repeated runs?
-* Which slices improved or regressed?
-* Is the metric correlated with user outcomes?
-* Can I inspect traces for examples near the decision boundary?
-
-## 2.4 Distributions of Outcomes
-
-LLM systems do not have one behavior. They have a distribution of behaviors.
-
-The same system may be excellent for short factual questions, mediocre for multi-hop reasoning, fragile for long documents, and unsafe around adversarial inputs. A single aggregate score collapses that distribution into one number.
-
-Evaluation should preserve distributional structure:
-
-* easy vs hard cases
-* short vs long inputs
-* common vs rare intents
-* new users vs power users
-* supported vs unsupported languages
-* high-confidence vs low-confidence retrieval
-* single-step vs multi-step agent tasks
-* benign vs adversarial requests
-
-This is why eval slicing matters. A system can improve globally while regressing on the cases that define product trust.
-
-In interviews, this is a strong framing:
-
-> I would not only report an overall score. I would slice by task type, risk level, input length, retrieval quality, and user cohort, because LLM failures are usually unevenly distributed.
-
-## 2.5 Labels and Preferences
-
-Labels say "this is correct" or "this has property X."
-
-Preferences say "output A is better than output B."
-
-Labels are natural for objective tasks:
-
-* expected category
-* correct extracted field
-* valid or invalid output
-* grounded or ungrounded claim
-
-Preferences are natural for subjective tasks:
-
-* answer A is more helpful than answer B
-* summary A is more concise while preserving key points
-* refusal A is safer and less annoying
-
-Preference data is powerful because users and annotators often find comparison easier than absolute scoring. It is also common in model training and alignment. But preferences still need rubrics. Without rubrics, annotators may optimize for style, verbosity, confidence, or politeness instead of actual task value.
+Agents are not automatically better than simple workflows. They add latency, cost, observability burden, safety risk, and failure surface area. In a good product design, "agentic" means "adaptive control loop," not "the model can do anything."
 
 ---
 
-# 3. How Evaluation Systems Compose
+# 3. Core Primitives
 
-The primitives combine into an evaluation stack.
+## 3.1 State
 
-At the bottom are test cases:
+State is the agent's working representation of the task.
+
+It can include:
+
+* user goal
+* task constraints
+* conversation history
+* retrieved documents
+* tool outputs
+* current plan
+* completed steps
+* pending approvals
+* budget usage
+* confidence estimates
+* error history
+
+State should be explicit when correctness matters. If all state lives only in the prompt, it becomes hard to validate, resume, debug, or enforce invariants.
+
+Good agent state is typed, inspectable, and small enough to keep signal high. The state object is the product equivalent of the Markov state in a decision process: it should contain enough information to choose the next action without dragging along irrelevant noise.
+
+## 3.2 Actions
+
+An action is something the agent can choose.
+
+Examples:
+
+* call a search tool
+* retrieve a document
+* query a database
+* write a draft
+* edit a file
+* send an email
+* request human approval
+* stop with a final answer
+
+The action space should be bounded. A support agent should not have the same tools as a finance agent. A read-only research agent should not have write access. A production agent should not be able to execute arbitrary shell commands unless the sandbox and approval model are designed for it.
+
+The smaller and more typed the action space, the easier the system is to evaluate.
+
+## 3.3 Observations
+
+An observation is the result of an action.
+
+Examples:
+
+* search results
+* API response
+* database row
+* test output
+* error message
+* user approval or rejection
+* timeout
+
+Observations are not automatically truth. Tool outputs can be stale, malformed, partial, or adversarial. A robust agent treats observations as inputs to validate, not facts to blindly absorb.
+
+## 3.4 Transitions
+
+A transition updates state after an action and observation.
 
 ```text
-input
-expected behavior
-metadata
-scoring method
+next_state = transition(previous_state, action, observation)
 ```
 
-A test case might include:
+This is where the system records progress, errors, budget usage, and new constraints. In a free-form loop, the transition may be implicit in the prompt. In a production agent, transitions should often be explicit code so the system can enforce invariants.
 
-* user prompt
-* source documents
-* expected JSON fields
-* rubric dimensions
-* risk category
-* tags such as "long_context", "billing", "adversarial", or "tool_required"
+Examples:
 
-The system under test then runs on those cases. For LLM applications, the "system" may include:
+* after a failed API call, increment retry count
+* after a successful draft, mark draft as ready for review
+* after human rejection, store feedback and move back to revision
+* after spending too many tokens, stop or summarize state
 
-* prompt template
-* model version
-* sampling settings
-* retriever
-* tool router
-* agent loop
-* guardrails
-* post-processing validators
+## 3.5 Stopping Rules
 
-Scorers convert outputs into measurements. Some scorers are deterministic, such as JSON schema validators. Some are statistical or model-based, such as judge models. Some are human workflows.
+A stopping rule decides when the loop ends.
 
-Metrics aggregate those scores:
+Common stopping rules:
 
-```text
-case scores -> slice scores -> aggregate scores -> release decision
-```
+* final answer generated
+* plan completed
+* confidence threshold reached
+* budget exhausted
+* max steps reached
+* repeated failure detected
+* human approval required
+* unsafe action requested
 
-The release decision should not be a blind threshold. It should be a policy:
+Stopping rules are not an implementation detail. They are part of the product contract. Without them, the system can loop forever, spend unbounded money, or take actions after the user expected it to stop.
 
-* block if critical safety cases regress
-* block if structured correctness falls below threshold
-* warn if cost rises more than expected
-* require human review if factuality improves but refusal quality drops
-* allow rollout if only low-risk latency improves and quality is stable
+## 3.6 Budgets
 
-That is the composition:
+Budgets limit resource use and autonomy.
 
-```text
-datasets + runners + scorers + slicing + uncertainty + release policy
-```
+Useful budgets:
 
-Evaluation becomes useful when it is wired into decisions.
+* token budget
+* model-call budget
+* wall-clock budget
+* tool-call budget
+* money budget
+* retry budget
+* side-effect budget
+* risk budget
+
+Budgets turn agent design into constrained optimization. The agent is not simply trying to solve the task; it is trying to solve the task within cost, latency, safety, and reliability limits.
+
+## 3.7 Planning
+
+Planning chooses a sequence or partial order of steps.
+
+Plans can be:
+
+* implicit, where the model reasons step by step inside one loop
+* explicit, where the system asks for a structured plan before execution
+* hierarchical, where a high-level plan decomposes into subplans
+* dynamic, where the plan is revised after observations
+
+Plans are useful because they expose intent before side effects happen. They also make it easier to validate whether the agent is about to do something irrelevant, unsafe, or too expensive.
+
+## 3.8 Execution
+
+Execution turns planned steps into tool calls and state transitions.
+
+The execution layer is where production systems need the most ordinary engineering:
+
+* idempotency keys
+* retries with backoff
+* timeout handling
+* concurrency control
+* authorization
+* observability
+* cancellation
+* audit logs
+* rollback or compensation
+
+An agent with weak execution semantics is just a fluent source of side effects.
 
 ---
 
-# 4. Evaluation Types
+# 4. Composition: From Primitives to an Agent
 
-## 4.1 Offline Evaluation
+A production agent usually has these layers:
 
-Offline evaluation runs the system against a fixed dataset before deployment.
+```text
+User goal
+  -> task policy
+  -> state representation
+  -> planner or next-action selector
+  -> tool router
+  -> execution layer
+  -> observation parser
+  -> state transition
+  -> validator / guardrail
+  -> stopping rule
+```
 
-Use it for:
+The important design question is where intelligence lives.
 
-* prompt changes
-* model upgrades
-* retriever changes
-* tool routing changes
-* safety policy updates
-* regression gates in CI
+Some systems put most intelligence in the LLM prompt. The model reads the full state, decides what to do, calls tools, and repeats. This is flexible but hard to bound.
 
-Benefits:
+Other systems put intelligence in explicit workflow code. The model only fills in narrow decisions, such as "classify this ticket" or "draft this reply." This is less flexible but more reliable.
 
-* repeatable
-* cheap compared to production failure
-* can include rare or adversarial cases
-* easy to compare versions side by side
+Most useful products sit in the middle: deterministic workflow for product-critical structure, LLM decisions for ambiguous language and judgment-heavy steps, and human approval for high-risk transitions.
 
-Limitations:
+## Actor / Evaluator Separation
 
-* may not match production distribution
-* can be overfit
-* may miss user behavior changes
-* may not capture long-term satisfaction
+Many agent systems separate the process that proposes actions from the process that evaluates them.
 
-Offline evals are the first gate, not the final truth.
+```text
+actor / policy proposes an action
+  -> environment, verifier, critic, reward model, or search process scores it
+  -> future updates distill useful behavior back into the policy
+```
 
-## 4.2 Online Evaluation
+The evaluator is not always another neural network. It can be a unit test, browser environment, policy checker, database fixture, human review, search process, or learned reward model.
 
-Online evaluation measures live behavior with real users.
+AlphaZero-style systems are the clean example: expensive search improves action targets, and the policy/value network learns to approximate that improved guidance. For LLM agents, a verifier or tool environment can play a similar role by identifying which trajectories are worth turning into training data.
+
+The failure mode is shared blind spots. If the evaluator rewards fluent but unsafe plans, or if a verifier only checks shallow success, the actor can learn to optimize the evaluator rather than the real task.
+
+---
+
+# 5. Agent Patterns
+
+## 5.1 ReAct
+
+ReAct combines reasoning and acting:
+
+```text
+Thought -> Action -> Observation -> Thought -> Action -> Observation -> Final
+```
+
+The pattern is useful because the model can choose tools based on intermediate evidence. It is especially natural for search, research, debugging, and tool-using assistants.
+
+The tradeoff is that ReAct loops are easy to over-trust. If the first observation is bad, the model may rationalize around it. If the tool result is noisy, the trajectory can drift. In production, ReAct needs step limits, tool schemas, observation validation, and logging.
+
+## 5.2 Planner / Executor
+
+A planner/executor separates intent from action.
+
+```text
+planner: produce structured plan
+validator: check plan
+executor: run steps
+observer: report results
+planner: revise if needed
+```
+
+This helps when actions are expensive or risky. The plan can be reviewed before execution, and the executor can be more deterministic than the planner.
+
+The tradeoff is plan brittleness. A plan generated before tool observations may be wrong. Good planner/executor systems allow controlled replanning instead of blindly following a stale plan.
+
+## 5.3 Reflect-and-Retry
+
+Reflect-and-retry asks the model or a verifier to critique an output or trajectory, then revise.
+
+This is useful for:
+
+* code generation
+* structured extraction
+* long-form writing
+* reasoning tasks with checkable constraints
+* tool-call repair
+
+The key is that reflection should be grounded in evidence. "Think again" is weaker than "compare the output against this schema, these tests, and these source documents."
+
+The tradeoff is cost. Reflection adds more model calls and can create false confidence if the same model critiques its own mistake without new information.
+
+## 5.4 Supervisor / Worker
+
+A supervisor/worker pattern uses one component to route, coordinate, or verify the work of other components.
 
 Examples:
 
-* A/B tests
-* shadow deployments
-* canary rollouts
-* thumbs-up/down
-* task completion
-* retention or repeat usage
-* escalation rate
-* manual review sampling
+* supervisor routes a support ticket to billing, technical, or account worker
+* supervisor decomposes a research task into search, extraction, and synthesis workers
+* supervisor checks whether a worker result is sufficient before final response
 
-Online evals answer the question offline evals cannot:
+This pattern is useful when subtasks require different prompts, tools, permissions, or models.
 
-Does this change improve real outcomes?
+The tradeoff is coordination overhead. Every handoff adds latency, state translation risk, and another place where errors can be hidden.
 
-But they are harder to interpret. User populations shift. Traffic is seasonal. A/B tests need enough volume. Some important failures are rare. User satisfaction can reward confident wrong answers if users do not notice the mistake immediately.
+## 5.5 Hierarchical Agents
 
-Online metrics should be paired with offline and trace-based analysis.
+Hierarchical agents decompose a large task into levels.
 
-## 4.3 Regression Evaluation
+```text
+goal
+  -> milestones
+    -> subtasks
+      -> tool actions
+```
 
-Regression evaluation asks:
+This is useful for long-horizon work such as software projects, research reports, and operations workflows.
 
-Did this change break something that used to work?
+The risk is that high-level mistakes propagate downward. If the top-level decomposition is wrong, lower-level agents may produce impressive but irrelevant work. Hierarchical agents need milestone checks and explicit acceptance criteria.
 
-Regression suites are especially important for LLM systems because small changes can have broad effects:
+## 5.6 Multi-Agent Systems
 
-* prompt wording changes
-* model version changes
-* retrieval chunking changes
-* tool schema changes
-* safety policy changes
-* sampling parameter changes
+Multi-agent systems use multiple agents that may collaborate, debate, specialize, or check each other.
 
-A good regression suite includes:
+Common uses:
 
-* past production failures
-* important customer workflows
-* edge cases discovered during debugging
-* safety-sensitive prompts
-* representative golden cases
+* specialist agents for different domains
+* critic agents for review
+* debate-style answer comparison
+* parallel search over alternative approaches
+* role-based workflow simulation
 
-Every resolved incident should become at least one regression test.
+The benefit is diversity of search. The cost is operational complexity. Multi-agent systems can multiply token spend, make debugging harder, and create the illusion of consensus when agents share the same model biases.
 
-## 4.4 Adversarial Evaluation
+Use multi-agent designs when specialization or parallel exploration clearly pays for the coordination cost.
 
-Adversarial evaluation probes how the system behaves under hostile, confusing, or boundary-case inputs.
+## 5.7 Event-Driven Agents
 
-Examples:
+Event-driven agents wake up in response to events:
 
-* prompt injection
-* jailbreak attempts
-* malicious tool requests
-* misleading source documents
-* impossible user requests
-* contradictory instructions
-* privacy-sensitive prompts
-* long-context distraction
+* webhook received
+* ticket created
+* build failed
+* document changed
+* customer replied
+* scheduled job fired
 
-Adversarial tests are not only for safety. They also reveal whether the system has crisp boundaries. A customer-support bot should know when not to answer. A coding agent should avoid destructive operations without approval. A medical assistant should avoid making diagnoses beyond its scope.
+This pattern fits production systems because it integrates with queues, task runners, retries, and observability. Instead of one long-running loop, the agent advances state across durable events.
 
-## 4.5 Synthetic Evaluation
+The tradeoff is state management. The agent must resume safely, handle duplicate events, and remain idempotent.
 
-Synthetic evaluation uses generated test cases.
+---
+
+# 6. Common Technologies and Implementation Patterns
+
+## 6.1 LangGraph
+
+LangGraph is useful when an agent is better represented as a graph of states and transitions than as a single free-form loop. Nodes represent steps, edges represent routing, and state is passed through the graph.
+
+The practical value is control. You can make loops explicit, limit transitions, persist state, and inspect where execution went.
 
 Use it when:
 
-* real data is scarce
-* rare failures need coverage
-* privacy prevents using production examples
-* you want broad combinatorial coverage
-* you need to stress a known weakness
+* the workflow has branches or loops
+* state needs to be durable
+* you want explicit control over agent transitions
+* debugging the path matters
 
-Synthetic tests are useful but dangerous. A generator model may produce cases that are too clean, too repetitive, or biased toward what another model can answer. Synthetic data should usually be sampled, reviewed, and mixed with real cases.
+## 6.2 MCP
 
-The best pattern is:
+The Model Context Protocol standardizes how models and agents connect to tools and external context. Its importance is not that it makes agents smarter. It makes tool access more uniform and composable.
 
-```text
-real failures -> characterize pattern -> generate variants -> review subset -> add to eval suite
-```
+In agent design, MCP is part of the tool boundary:
 
-## 4.6 Human Evaluation
+* what tools exist?
+* what schemas describe them?
+* what permissions do they have?
+* what context can they expose?
+* what side effects can they perform?
 
-Human evaluation uses annotators, domain experts, internal reviewers, or end users to judge outputs.
+The more powerful the MCP server, the more important sandboxing, auth, logging, and approval become.
 
-It is useful when:
+## 6.3 OpenAI Tools / Function Calling
 
-* correctness is subjective
-* policy interpretation matters
-* factuality requires expertise
-* failure cost is high
-* automated judges are untrusted
+Tool calling gives the model a structured way to request actions.
 
-Human evals need operational discipline:
+This is useful because the system can expose a typed action space instead of asking the model to write arbitrary text commands.
 
-* clear rubrics
-* calibration examples
-* inter-annotator agreement checks
-* adjudication rules
-* label audits
-* reviewer fatigue management
+Good function schemas are:
 
-Human review is not automatically ground truth. Humans can be inconsistent, biased, rushed, or fooled by fluent wrong answers. But for many tasks, human evaluation remains the highest-quality signal when designed carefully.
+* small
+* specific
+* typed
+* validated
+* permission-aware
+* designed around product actions, not internal implementation details
 
----
+Function calling does not guarantee correct tool use. It only gives the system a better interface for constraining and validating actions.
 
-# 5. Common Patterns and Technologies
+## 6.4 AutoGen and CrewAI
 
-## 5.1 Eval Harnesses
+AutoGen and CrewAI are commonly used for multi-agent workflows, role-based collaboration, and agent teams. They are useful for prototyping coordination patterns such as researcher/writer/reviewer or planner/coder/tester.
 
-An eval harness is a runner that executes test cases against a system and records scores.
+The production question is whether the framework's abstractions match the reliability boundary you need. For demos, role-based agents can be fast to build. For production, you still need explicit state, permissions, evaluation, retry logic, observability, and cost control.
 
-Common harness capabilities:
+## 6.5 DSPy
 
-* load datasets
-* run model or application versions
-* call scorers
-* aggregate metrics
-* compare versions
-* export reports
-* fail CI on regressions
+DSPy is relevant when prompt and module behavior should be optimized programmatically instead of hand-tuned. It is less about autonomous tool loops and more about treating LLM calls as optimizable modules in a pipeline.
 
-Examples of tools and patterns:
+For agents, DSPy can help optimize subcomponents such as:
 
-* custom Python runners
-* pytest-based eval suites
-* OpenAI Evals-style datasets and graders
-* promptfoo for prompt regression tests
-* LangSmith or Langfuse datasets and traces
-* Braintrust-style experiment tracking
-* internal CI jobs that compare candidate vs baseline
+* classification prompts
+* extraction modules
+* rerankers
+* plan generators
+* verifiers
 
-The harness matters because evals should be repeatable. If evaluation is a spreadsheet and a manual prompt, it will not reliably protect production.
+The connection to Chapter 0 is direct: instead of manually guessing prompts, you define objectives and let examples shape the system.
 
-## 5.2 Prompt Test Suites
+## 6.6 Queues and Task Runners
 
-Prompt test suites treat prompts as versioned behavior.
+Agents that do real work often need durable execution.
 
-They check:
+Common choices:
 
-* output format
-* refusal behavior
-* tool call selection
-* groundedness
-* tone
-* policy compliance
-* task completion
+* Celery
+* Sidekiq
+* BullMQ
+* Temporal
+* Airflow or Dagster for scheduled/data workflows
+* cloud queues such as SQS, Pub/Sub, or RabbitMQ
 
-Prompt tests are not only for prompt engineers. In LLM systems, a prompt is production code. It deserves regression tests.
+Queues matter because agent steps can be slow, flaky, or asynchronous. A model call may time out. A third-party API may rate-limit. A human approval may take hours. Durable orchestration prevents the whole workflow from depending on one in-memory process.
 
-## 5.3 A/B Tests
+## 6.7 Sandboxed Execution
 
-A/B tests compare variants on live traffic.
-
-Typical variants:
-
-* old prompt vs new prompt
-* model A vs model B
-* retrieval strategy A vs B
-* different agent tool policies
-* different refusal messages
-
-Good A/B tests define:
-
-* primary metric
-* guardrail metrics
-* target population
-* sample size expectations
-* rollout and rollback rules
-* how to handle novelty effects and delayed outcomes
-
-The primary metric says what you are trying to improve. Guardrail metrics prevent "improvements" that create hidden damage. For example, a system might increase click-through rate by becoming more sensational, while factuality and user trust decline.
-
-## 5.4 Tracing Dashboards
-
-Tracing dashboards show what happened inside the system.
-
-For an LLM workflow, traces may include:
-
-* prompt template version
-* retrieved documents
-* model calls
-* token usage
-* tool calls
-* intermediate agent steps
-* validation failures
-* retries
-* final output
-* latency breakdown
-* costs
-* scores
-
-Tools and patterns:
-
-* OpenTelemetry spans
-* LangSmith traces
-* Langfuse traces
-* Honeycomb or Datadog dashboards
-* custom request logs
-* model gateway logs
-
-Metrics tell you that quality changed. Traces help you understand why.
-
-## 5.5 Scoring Pipelines
-
-Scoring pipelines turn raw outputs into structured evaluation results.
-
-They may include:
-
-* deterministic validators
-* regex or parser checks
-* schema validation
-* retrieval-grounding checks
-* judge model calls
-* human review queues
-* aggregation jobs
-* dashboards
-
-In production, scoring is often asynchronous. You may not want to block the user response while a judge model grades factuality. Instead, log the interaction, score it later, and feed the result into monitoring, training data, or review workflows.
-
-## 5.6 Judge Models
-
-Judge models are LLMs used to grade other LLM outputs.
-
-They are useful for:
-
-* factuality checks
-* helpfulness ratings
-* rubric scoring
-* pairwise preferences
-* style compliance
-* refusal quality
-
-They are risky because they can inherit bias, be fooled by fluency, prefer verbosity, miss domain errors, and drift when the judge model changes.
-
-Judge models should be treated as imperfect measurement instruments. Calibrate them against human labels. Track judge version. Use structured rubrics. Inspect disagreements. Avoid using the same model family as both generator and judge when correlation bias matters.
-
-### Practical judge-model caveats
-
-A judge model is useful when it is cheaper, faster, or more scalable than human review. It is dangerous when it becomes an unquestioned source of truth.
-
-Common failure patterns:
-
-* **verbosity bias:** longer answers look more thoughtful even when they are less precise.
-* **style bias:** polished prose gets higher scores than terse correct answers.
-* **authority bias:** confident hallucinations pass because they sound plausible.
-* **shared blind spots:** generator and judge from the same model family make similar mistakes.
-* **rubric drift:** small prompt changes alter score distributions.
-* **position bias:** in pairwise comparison, first or second answer is preferred independent of quality.
-
-A mature setup calibrates the judge:
-
-```text
-human-labeled calibration set
-  -> judge prompt / rubric
-  -> judge scores
-  -> disagreement analysis
-  -> rubric or prompt revision
-  -> locked judge version for release comparisons
-```
-
-Track judge agreement with humans by slice. A judge that is 90% aligned on easy support answers but 55% aligned on safety refusals should not gate safety releases.
-
-## 5.7 Rubric-Based Grading
-
-A rubric decomposes quality into dimensions.
-
-Example dimensions for a RAG answer:
-
-* answers the user's question
-* cites relevant sources
-* avoids unsupported claims
-* handles uncertainty
-* uses concise language
-
-Rubrics make qualitative judgment more consistent. They also make scores more actionable. "The answer got 3/5" is vague. "The answer was helpful but ungrounded" tells the engineer where to look.
-
-## 5.8 Data Labeling Workflows
-
-Labeling workflows turn raw examples into evaluation data.
-
-Important pieces:
-
-* sampling policy
-* annotation guidelines
-* reviewer training
-* calibration examples
-* multi-reviewer agreement
-* adjudication
-* label versioning
-* privacy controls
-
-Labeling is an engineering system, not just a data task. If labels are inconsistent, every metric built on top of them becomes questionable.
-
-## 5.9 Scorecards and Review Loops
-
-Teams often turn eval results into a scorecard rather than one scalar score.
-
-Example scorecard for a RAG support assistant:
-
-| Dimension | Scorer | Gate |
-| --------- | ------ | ---- |
-| JSON validity | deterministic parser | must be 100% |
-| Citation support | source-span checker + human spot check | no critical unsupported claims |
-| Helpfulness | judge model calibrated to human labels | no regression by more than 2% |
-| Safety/refusal | curated golden set | zero known critical failures |
-| Latency | tracing metric | p95 under target |
-| Cost | token + tool accounting | cost per successful case under budget |
-
-The scorecard matters because release decisions are multi-objective. A model can improve helpfulness while getting worse at citations, or reduce latency while increasing hallucinations.
-
-A review loop usually looks like:
-
-```text
-production trace sampled
-  -> automated scorers run
-  -> high-risk / low-confidence cases enter human review
-  -> labels and failure tags are stored
-  -> eval dataset is updated
-  -> product or prompt changes are tested against the updated suite
-```
-
-The practical rule: failures should not just be counted; they should become future test cases.
-
----
-
-# 6. Metrics That Matter
-
-## 6.1 Task Success Rate
-
-Task success rate measures whether the system completed the user's intended task.
-
-It is often the most important product metric, but it can be hard to define.
-
-For a coding agent, success might mean:
-
-* tests pass
-* requested files changed
-* no unrelated edits
-* user accepts the result
-
-For customer support, success might mean:
-
-* user problem resolved
-* no escalation needed
-* answer followed policy
-* user did not reopen the ticket
-
-Task success should be grounded in real user value, not just model output quality.
-
-## 6.2 Exact Match and Structured Correctness
-
-Exact match is useful when there is a canonical answer.
+Sandboxing controls what tool execution can affect.
 
 Examples:
 
-* classification label
-* extracted date
-* final numeric answer
-* selected option
+* run code in a container
+* mount a temporary filesystem
+* restrict network access
+* use read-only credentials
+* require approval for writes
+* isolate browser sessions
+* apply per-tool permissions
 
-Structured correctness expands this idea to typed outputs:
-
-* valid JSON
-* schema compliance
-* required fields present
-* values in allowed ranges
-* tool arguments valid
-
-Exact match is brittle for free-form language. It is excellent for places where downstream software needs precise structure.
-
-## 6.3 Factuality and Hallucination Rate
-
-Factuality asks whether claims are true and supported.
-
-Hallucination rate measures unsupported or false claims.
-
-For RAG systems, factuality should often be measured against provided sources, not general world knowledge. A model may say something true but unsupported by the retrieved context. Depending on the product, that may still be a failure.
-
-Common scoring approaches:
-
-* claim extraction plus source support checks
-* human factuality review
-* judge model rubric
-* citation precision and recall
-* answerability checks
-
-Factuality metrics are hard but essential in trust-sensitive products.
-
-## 6.4 Tool Success Rate
-
-Tool success rate measures whether tool calls were correct and completed.
-
-Break it down:
-
-* chose the right tool
-* formed valid arguments
-* handled tool errors
-* interpreted tool results correctly
-* avoided unnecessary tool calls
-
-An agent can produce a fluent final answer while using the wrong tool or ignoring a failed tool call. Tool success metrics catch failures hidden by natural language.
-
-## 6.5 Latency
-
-Latency measures user wait time.
-
-Useful views:
-
-* p50 latency
-* p95 latency
-* p99 latency
-* time to first token
-* end-to-end completion time
-* per-step breakdown
-
-For LLM systems, latency comes from:
-
-* prompt length
-* output length
-* model size
-* retrieval
-* tool calls
-* retries
-* judge calls
-* orchestration
-
-Latency is a quality metric. A technically correct answer that arrives too late may fail the product.
-
-## 6.6 Cost
-
-Cost should usually be measured per useful outcome, not just per request.
-
-Examples:
-
-* cost per successful resolution
-* cost per accepted code change
-* cost per grounded answer
-* cost per human escalation avoided
-
-A more expensive model may be cheaper overall if it reduces retries, escalations, or manual review. A cheaper model may be more expensive if it fails more often.
-
-## 6.7 User Satisfaction
-
-User satisfaction captures subjective value.
-
-Signals:
-
-* thumbs up/down
-* rating
-* re-query rate
-* abandonment
-* retention
-* support escalation
-* qualitative feedback
-
-Satisfaction is important but easy to misread. Users may like answers that are confident and wrong. Users may dislike safe refusals that are correct. Satisfaction should be a product signal, not the only truth metric.
-
-## 6.8 Refusal Quality
-
-Refusal quality measures whether the system refuses when it should and helps when it can.
-
-Two failure classes matter:
-
-* under-refusal: answers unsafe or unsupported requests
-* over-refusal: refuses benign requests
-
-A good refusal:
-
-* identifies the boundary
-* avoids providing harmful content
-* offers safe alternatives where possible
-* is concise and respectful
-
-Refusal metrics should include both safety and usefulness. A system that refuses everything is safe but useless.
-
-## 6.9 Robustness and Variance
-
-Robustness measures stability under perturbation.
-
-Examples:
-
-* paraphrased inputs
-* different input order
-* longer context
-* irrelevant distractors
-* repeated stochastic runs
-* model version changes
-* tool latency or failure
-
-Variance matters because a system that succeeds 90% of the time on repeated runs can still be unacceptable for high-stakes tasks. For stochastic systems, evaluate multiple runs or run deterministically when possible.
+Sandboxing is especially important when agents can execute code, browse the web, modify files, send messages, or transact money.
 
 ---
 
-# 7. Implementation Details
+# 7. Real Implementation Details
 
-## 7.1 Dataset Construction
+## 7.1 State Machines vs Free-Form Loops
 
-A good eval dataset is intentionally built.
-
-Sources:
-
-* production logs
-* user-reported failures
-* support escalations
-* manually written edge cases
-* synthetic variants
-* adversarial red-team prompts
-* domain expert examples
-
-Each example should include metadata:
-
-* task type
-* risk level
-* source
-* expected behavior
-* scoring method
-* relevant documents or tool fixtures
-* known failure category
-
-Do not treat the dataset as static. It should evolve with product usage and incidents.
-
-## 7.2 Golden Set Design
-
-A golden set is a high-quality, trusted benchmark used for release decisions.
-
-Properties:
-
-* carefully labeled
-* representative of critical workflows
-* includes edge cases
-* stable enough for version comparison
-* protected from prompt or model overfitting
-* reviewed when product policy changes
-
-Golden sets should not be the only eval data. If engineers repeatedly tune against the same golden set, it becomes less meaningful. Keep some holdout data and add fresh production samples.
-
-## 7.3 Test Case Generation
-
-Test generation expands coverage.
-
-Patterns:
-
-* paraphrase existing cases
-* generate boundary cases
-* vary entities, formats, and lengths
-* generate adversarial distractors
-* mutate tool responses
-* combine intents
-
-Generated tests should be filtered. A synthetic test with wrong expected behavior is worse than no test because it teaches the system and the team the wrong lesson.
-
-## 7.4 Eval Slicing
-
-Slicing means reporting metrics by subgroup.
-
-Useful slices:
-
-* task type
-* input length
-* language
-* customer tier
-* data source
-* retrieval confidence
-* model version
-* tool path
-* risk category
-* failure type
-
-Slicing turns one vague number into a map of system behavior. It also reveals fairness and reliability issues that aggregate scores hide.
-
-## 7.5 Confidence Intervals and Uncertainty Intuition
-
-Every metric estimated from samples has uncertainty.
-
-If 87 out of 100 examples pass, the observed pass rate is 87%. But the true pass rate over the whole production distribution is not exactly known. With only 100 examples, a few examples can move the score noticeably.
-
-The intuition:
-
-* larger sample sizes reduce uncertainty
-* metrics near 50% have more variance than metrics near 0% or 100%
-* small score deltas may be noise
-* sliced metrics need enough examples per slice
-* repeated stochastic runs reveal model variance
-
-You do not always need to compute formal statistics in an interview, but you should mention uncertainty. A mature answer says:
-
-> I would avoid overreacting to tiny changes unless the sample size is large enough and the slice is important.
-
-## 7.6 Score Aggregation
-
-Aggregation combines many measurements into a decision.
-
-Simple averaging is often wrong because not all failures have equal cost.
-
-Better aggregation patterns:
-
-* separate quality, safety, latency, and cost metrics
-* use weighted scores only when weights reflect product risk
-* require hard gates for critical failures
-* report slices next to aggregate scores
-* track confidence intervals
-* compare candidate vs baseline, not candidate alone
-
-For example:
+A free-form loop gives the model broad control:
 
 ```text
-Ship only if:
-- task success does not regress more than 1%
-- hallucination rate improves or stays flat
-- critical safety cases have zero known failures
-- p95 latency stays under 3 seconds
-- cost per successful task stays within budget
+while not done:
+  ask model what to do
+  run tool
+  append observation
 ```
 
-This is better than a single "eval score" because release decisions are multi-objective.
+This is easy to build and good for exploration. It is also hard to reason about.
 
-## 7.7 Concrete Eval Harness Shape
-
-A real eval harness needs more than a loop over examples. It needs stable inputs, reproducible system configuration, scorers, traces, and comparison logic.
+A state machine defines allowed states and transitions:
 
 ```text
-eval_cases.jsonl
-  -> load case + metadata
-  -> run candidate system
-  -> run baseline system (optional)
-  -> collect trace
-  -> run deterministic scorers
-  -> run judge scorers
-  -> aggregate by slice
-  -> compare candidate to baseline
-  -> emit report and release gate
+drafting -> validation -> approval -> execution -> done
 ```
 
-A useful case record contains:
+This is less flexible but easier to test, observe, and secure.
 
-```json
-{
-  "id": "refund_042",
-  "task_type": "refund_policy",
-  "input": "Can I get a refund after 45 days?",
-  "expected_behavior": "Explain policy exception rules and ask for order date.",
-  "risk_level": "medium",
-  "fixtures": {"retrieved_docs": ["refund_policy_v3"]},
-  "scorers": ["groundedness", "helpfulness", "policy_compliance"]
-}
-```
+The production default should be: use explicit state machines for product-critical flows, and use free-form loops only inside bounded steps where the blast radius is small.
 
-The harness should record:
+## 7.2 Async Execution
 
-* model and prompt version,
-* retrieval index version,
-* tool fixture version,
-* sampling parameters,
-* full trace or trace pointer,
-* raw output,
-* scorer outputs,
-* final pass/fail or score.
+Agent work often outlives a request/response cycle.
 
-Without versioning, you cannot explain why yesterday's eval result differs from today's. Without traces, you cannot debug which stage caused the regression.
+Async execution is needed when:
 
-## 7.8 Human Review Operations
+* tool calls are slow
+* tasks can be queued
+* humans may approve later
+* jobs need retries
+* many agents run concurrently
+* streaming progress matters
 
-Human review is most valuable when it is targeted.
+The agent should expose job status, cancellation, partial results, and error states. Otherwise users cannot tell whether the system is working, stuck, or unsafe.
 
-Do not send random outputs to reviewers forever. Sample intentionally:
+## 7.3 Sandboxing and Permissions
 
-* high-risk categories,
-* low-confidence judge scores,
-* large model-vs-baseline disagreements,
-* user-reported failures,
-* new product flows,
-* slices with high variance,
-* cases near release thresholds.
+Tools should be permissioned by risk.
 
-Reviewers need:
+Example tiers:
 
-* a written rubric,
-* examples of good and bad labels,
-* a way to mark ambiguity,
-* an escalation path for unclear policy,
-* periodic calibration sessions,
-* disagreement adjudication.
+* read-only search
+* read-only internal data
+* draft-only write actions
+* reversible writes
+* irreversible writes
+* external side effects such as email, purchases, or production deploys
 
-The output of review should be structured:
+Higher tiers need stronger controls: approvals, audit logs, rate limits, policy checks, and possibly human review.
 
-```text
-label + severity + failure category + free-text note + source evidence
-```
+## 7.4 Idempotency
 
-That structure lets failures become dashboards, eval slices, and training data.
+Agents retry. Networks fail. Users refresh pages. Queues redeliver messages.
+
+Any side-effecting action should have an idempotency strategy:
+
+* idempotency keys
+* dedupe tables
+* "already completed" checks
+* deterministic output paths
+* transactional writes
+* compensation steps for reversible actions
+
+Without idempotency, an agent can send the same email twice, create duplicate tickets, charge a card twice, or apply the same code change repeatedly.
+
+## 7.5 Cancellation
+
+Cancellation is a product requirement for long-running agents.
+
+The system should define:
+
+* what happens to in-flight model calls
+* what happens to queued steps
+* what happens to partial side effects
+* what state is shown to the user
+* whether the workflow can resume later
+
+Cancellation is easiest when execution is divided into steps with clear boundaries. It is hardest when the agent is one unstructured process with hidden state.
+
+## 7.6 Budgets and Rate Limits
+
+Budgets prevent runaway behavior; rate limits protect shared systems.
+
+Useful implementation patterns:
+
+* per-task max steps
+* per-user daily spend limits
+* per-tool call limits
+* per-model token limits
+* retry caps
+* circuit breakers
+* queue concurrency limits
+* backpressure when downstream services are unhealthy
+
+The agent should know when a budget is exhausted and respond gracefully: summarize partial progress, ask for permission, or stop with a clear reason.
+
+## 7.7 Parallelization vs Sequential Execution
+
+Parallel execution reduces latency when steps are independent.
+
+Good parallel candidates:
+
+* searching multiple sources
+* asking multiple extractors to process separate documents
+* generating alternative plans
+* running independent checks
+
+Sequential execution is better when each step depends on the previous observation:
+
+* debugging a failing test
+* form-filling with validation
+* negotiation with a user
+* operations workflows with side effects
+
+The interview framing is simple: parallelize independent uncertainty reduction; serialize dependent decisions and side effects.
+
+## 7.8 Plan Validation
+
+Plan validation checks whether the agent's intended trajectory is acceptable before execution.
+
+Validation can check:
+
+* tool permissions
+* missing prerequisites
+* cost estimate
+* unsafe actions
+* irrelevant steps
+* user constraints
+* required approvals
+* expected outputs
+
+Plan validation is especially important because early mistakes cascade. A bad first step can send the agent into the wrong part of the state space, where every later step looks locally reasonable but globally wrong.
 
 ---
 
 # 8. Tradeoffs
 
-## 8.1 Correctness vs Cost
+## 8.1 Latency
 
-More evaluation costs more money and time. Judge models, human labels, repeated stochastic runs, and large test suites can be expensive.
+Agents are slower than single prompts because they make multiple model calls and tool calls. Parallelism can help, but only when steps are independent.
 
-The right question is not "how do we evaluate everything?" It is:
+Low-latency products should prefer narrow workflows, smaller models for routing, caching, and streaming progress.
 
-What failures are expensive enough to justify stronger evaluation?
+Every loop iteration may add model latency, tool latency, retrieval latency, validation latency, and queueing. The painful cases are dependent plans where step N cannot start until step N-1 completes.
 
-High-risk flows need deeper evals. Low-risk copy suggestions may only need lightweight regression tests and online monitoring.
+Good designs define when to stop early, when to return a partial result, and when to ask a human rather than spending more model calls.
 
-## 8.2 Speed vs Confidence
+## 8.2 Cost
 
-Fast evals are useful in development and CI. Slow evals are useful before launches.
+Agent cost grows with trajectory length:
 
-A practical stack often has layers:
+```text
+total cost = sum(model calls + tool calls + retries + verification + human review)
+```
 
-* quick smoke tests on every prompt change
-* medium regression suite in CI
-* larger offline benchmark before release
-* online canary after release
-* periodic human review
+Reflection, multi-agent debate, and large context windows can improve quality but quickly multiply spend. Budgets and evaluation are the only honest way to know whether the quality gain is worth it.
 
-This gives developers fast feedback without pretending a small test suite proves production readiness.
+## 8.3 Reliability
 
-## 8.3 Automation vs Judgment
+Every loop iteration is another chance for error. Reliability comes from narrowing the action space, validating observations, using typed state, and measuring trajectories.
 
-Automated evals scale. Human judgment catches nuance.
+The system should not depend on the model being wise at every step. It should make bad steps detectable and recoverable.
 
-Use automation for:
+## 8.4 Correctness
 
-* schema checks
-* exact correctness
-* known failure patterns
-* broad regression coverage
-* continuous monitoring
+Agents are strong at ambiguous, language-heavy work and weak at hidden invariants. If correctness is defined by strict rules, encode those rules in code or validation.
 
-Use humans for:
+Use the model for judgment. Use software for invariants.
 
-* ambiguous quality
-* policy interpretation
-* expert factuality
-* new failure discovery
-* judge calibration
+An agent can make a locally reasonable decision at each step and still end in the wrong state because errors compound. A bad retrieval result can cause a bad tool call; a bad tool observation can cause a bad plan revision; a bad plan revision can trigger an unsafe action.
 
-The best systems combine both.
+Correctness therefore needs checkpoints: tool argument validation, source grounding, state invariants, human approval for irreversible actions, and evaluation of full trajectories rather than only final answers.
 
-## 8.4 Stability vs Adaptation
+## 8.5 Scaling
 
-A stable benchmark enables version comparison. An adaptive benchmark catches new failures.
+Scaling agents is harder than scaling stateless calls because long-running work consumes queues, model capacity, tool capacity, and human review bandwidth.
 
-You need both:
+Scaling requires:
 
-* stable golden set for longitudinal tracking
-* fresh sampled data for distribution shift
-* incident-derived tests for known regressions
-* holdout sets to reduce overfitting
+* queueing
+* concurrency limits
+* task prioritization
+* load shedding
+* model fallback tiers
+* observability by step and tool
 
-## 8.5 Aggregate Metrics vs Debuggability
+## 8.6 Operational Complexity
 
-Executives want a single number. Engineers need failure examples.
+Agents increase the number of things operators must understand:
 
-A good evaluation report gives both:
+* why did it choose this action?
+* what state did it see?
+* what tools did it call?
+* what did it ignore?
+* what budget did it spend?
+* why did it stop?
 
-* headline metrics
-* slice breakdowns
-* representative failures
-* trace links
-* changes from baseline
-* release recommendation
-
-The score should point engineers toward the next debugging action.
+If you cannot answer those questions from logs, the agent is not production-ready.
 
 ---
 
 # 9. Failure Modes
 
-## 9.1 Misleading Metrics
+## 9.1 Bad First-Step Cascades
 
-A metric is misleading when it improves while user value worsens.
+The first action often sets the trajectory. A bad search query, wrong classification, or flawed plan can push the agent into a state where later decisions are built on weak evidence.
 
-Examples:
+Mitigation:
 
-* measuring answer length instead of helpfulness
-* measuring thumbs-up without factuality
-* measuring exact match for a task with many valid phrasings
-* measuring average success while high-risk cases regress
-* measuring tool call count and accidentally rewarding unnecessary tools
+* validate plans before execution
+* use retrieval quality checks
+* require clarification when the goal is ambiguous
+* compare multiple first-step options for high-value tasks
 
-A metric is worse than useless when it actively drives the team toward bad behavior. For example, optimizing a support bot for fewer escalations can make it avoid escalation even when a human is needed.
+## 9.2 Trajectory Collapse
 
-## 9.2 Benchmark Overfit
+Trajectory collapse happens when the agent narrows too early and stops exploring alternatives. It may repeatedly reinforce one mistaken interpretation.
 
-Benchmark overfit happens when the system improves on the eval set without improving real behavior.
+Mitigation:
 
-Causes:
+* preserve uncertainty in state
+* ask for alternative hypotheses
+* use verifier checks
+* branch search for high-risk tasks
 
-* repeated tuning against the same examples
-* prompt examples copied from test cases
-* model trained on benchmark data
-* synthetic tests too similar to generator patterns
-* engineers learning benchmark quirks
+## 9.3 Tool Feedback Loops
 
-Mitigations:
+An agent can call a tool, misread the result, call another tool based on that mistake, then continue amplifying the error.
 
-* holdout sets
-* fresh production samples
-* private evals
-* rotate some tests
-* inspect real failures
-* measure online outcomes
+Mitigation:
 
-## 9.3 Eval Leakage
+* parse observations into typed structures
+* detect repeated similar tool calls
+* cap retries
+* summarize evidence separately from conclusions
 
-Eval leakage occurs when test answers or patterns leak into the system being evaluated.
+## 9.4 Runaway Costs
 
-Examples:
+Agents can spend money through long loops, retries, large contexts, or multi-agent expansion.
 
-* putting golden examples into the prompt
-* training on eval data
-* retrieving eval answers from a vector store
-* judge prompt revealing expected answers
-* developers manually special-casing known cases
+Mitigation:
 
-Leakage makes the score untrustworthy because the evaluation no longer measures generalization.
+* hard budgets
+* cost estimates before execution
+* stop reasons
+* cheaper models for low-risk steps
+* user approval before expensive continuation
 
-## 9.4 Judge Bias
+## 9.5 Duplicated Side Effects
 
-Judge models have biases.
+Retries and resumptions can duplicate external actions.
 
-They may prefer:
+Mitigation:
 
-* longer answers
-* confident tone
-* familiar model style
-* their own model family's outputs
-* safe-sounding but unhelpful responses
-* plausible explanations over correct reasoning
+* idempotency keys
+* side-effect logs
+* dedupe checks
+* approval records
+* transactional boundaries
 
-Mitigations:
+## 9.6 Memory Drift
 
-* calibrate against human labels
-* use pairwise judging with randomized order
-* use clear rubrics
-* track judge versions
-* inspect judge disagreements
-* use deterministic validators where possible
+Memory drift occurs when the agent stores summaries, preferences, or beliefs that become stale or wrong.
 
-## 9.5 Synthetic Mismatch
+Mitigation:
 
-Synthetic tests may not match real users.
+* attach provenance to memories
+* expire or revalidate memory
+* separate facts from preferences
+* avoid writing memory after low-confidence interactions
 
-They can be:
+## 9.7 Infinite Loops
 
-* too clean
-* too verbose
-* too balanced
-* too easy
-* biased toward the generating model
-* missing messy production context
+The agent may keep retrying, searching, reflecting, or asking itself to continue.
 
-Synthetic evals are best used for coverage expansion, not as the sole source of truth.
+Mitigation:
 
-## 9.6 Blind Spots
+* max steps
+* repeated-state detection
+* retry caps
+* progress checks
+* explicit "unable to complete" terminal states
 
-Every eval suite has blind spots.
+## 9.8 Over-Autonomy
 
-Common blind spots:
+Over-autonomy means the agent has more freedom than the product, user, or organization can safely support.
 
-* rare but catastrophic failures
-* long-tail user intents
-* multilingual users
-* accessibility needs
-* tool outages
-* adversarial behavior
-* delayed user dissatisfaction
-* data freshness issues
+Symptoms:
 
-The goal is not perfect coverage. The goal is to continuously shrink the unknown failure surface.
+* broad tools with unclear permissions
+* irreversible actions without approval
+* vague success criteria
+* hidden long-running work
+* no audit trail
+
+Mitigation is product design, not just prompt design: bounded action spaces, human-in-the-loop checkpoints, clear user consent, and explicit escalation paths.
 
 ---
 
-# 10. What to Say in an Interview
+# 10. Product Framing
 
-When asked how you would evaluate an LLM system, start from the product objective.
+## 10.1 Why Agents Are Useful
 
-A strong answer:
+Agents create leverage when users want outcomes, not individual tool operations.
 
-1. Defines the task and failure costs.
-2. Separates objective correctness from subjective quality.
-3. Builds a golden set from representative and high-risk cases.
-4. Uses deterministic checks where possible.
-5. Uses judge models or humans for qualitative dimensions.
-6. Slices metrics by task, cohort, risk, and input shape.
-7. Compares candidate vs baseline with uncertainty.
-8. Adds regression tests for production failures.
-9. Uses online A/B tests or canaries to validate real impact.
-10. Monitors traces, cost, latency, and safety after launch.
+A user does not want to manually search logs, compare docs, draft a fix, and run checks. They want the issue investigated. The agent is valuable when it can coordinate the steps while keeping the user informed and in control.
 
-For example:
+## 10.2 When Not to Use Agents
 
-> I would not rely on one aggregate score. I would build a layered eval: exact validators for structured outputs, source-grounded factuality checks for RAG answers, rubric-based judge or human scoring for helpfulness, regression tests for known failures, and online metrics like task completion and escalation rate. I would slice results by intent, risk level, input length, and retrieval quality, then use hard gates for safety and correctness.
+Do not use an agent when:
 
-That answer shows production judgment.
+* a deterministic workflow is sufficient
+* the task is single-step
+* the action space cannot be bounded
+* failures are hard to detect
+* side effects are high-risk and irreversible
+* latency must be very low
+* the user needs predictable behavior more than flexibility
 
----
+Many "agent" products should start as guided workflows with LLM-assisted steps.
 
-# 11. Takeaways
+## 10.3 Guided Workflow vs Autonomous Agent
 
-Evaluation is not just measuring model accuracy. It is building a trustworthy feedback system around a probabilistic product.
+A guided workflow has predefined stages and uses the LLM inside them.
 
-The core primitives are:
+An autonomous agent chooses more of the path itself.
 
-* metrics compress behavior
-* ground truth defines comparison
-* signal vs noise determines trust
-* distributions reveal hidden regressions
-* labels and preferences encode quality
+Guided workflows are better when the product has known structure, compliance requirements, or high cost of mistakes. Autonomous agents are better when the task space is open-ended and exploration is valuable.
 
-The core engineering pattern is:
+The most shippable design is often:
 
 ```text
-datasets + runners + scorers + slices + uncertainty + release policy
+guided workflow + bounded agentic substeps + human approval for high-risk actions
 ```
 
-Strong evaluation systems are layered. They combine offline tests, online experiments, regression suites, adversarial probes, synthetic cases, and human judgment.
+## 10.4 Human-in-the-Loop
 
-The most common mistake is treating an eval score as truth. A score is evidence. Good engineers ask where it came from, what it misses, how uncertain it is, and whether it maps to user value.
+Human-in-the-loop is not a failure of automation. It is a control boundary.
+
+Use human checkpoints when:
+
+* confidence is low
+* cost is high
+* action is irreversible
+* policy requires approval
+* user intent is ambiguous
+* the system enters an unknown state
+
+The agent should make review easy by presenting the plan, evidence, expected side effects, and alternatives.
 
 ---
 
-# 12. What Comes Next
+# 11. What to Say in an Interview
 
-Evaluation produces the signal that learning systems consume.
+A strong answer frames agents as bounded decision systems:
 
-Once you can measure quality, you can decide which examples matter, which failures should become training data, which preferences should update a policy, and which feedback loops are safe to automate.
+> I would model the agent as a loop over state, actions, observations, and transitions. The LLM can choose actions, but the product defines the allowed action space, budgets, stopping rules, and approval boundaries.
 
-Chapter 5 builds on this by asking:
+Then add the implementation detail:
 
-How does usage data become better behavior over time?
+> For production, I would avoid a completely free-form loop for high-risk workflows. I would use an explicit state machine or graph, typed tool schemas, idempotent execution, plan validation, logging, and step-level evaluation.
+
+Then discuss the tradeoff:
+
+> Agents are useful when the path depends on observations, but they are more expensive and less predictable than deterministic workflows. I would choose autonomy only where adaptivity is worth the extra latency, cost, and failure surface.
+
+Finally, connect to safety:
+
+> Safe autonomy comes from bounded action spaces, budgets, validation, sandboxing, and human approval for risky side effects. The goal is not to let the model do anything; it is to let it make useful decisions inside a controlled system.
+
+---
+
+# 12. Chapter Takeaways
+
+* An agent is a controlled loop over state, actions, observations, transitions, and stopping rules.
+* The LLM is usually the policy component, not the whole system.
+* State should be explicit, typed, inspectable, and small enough to preserve signal.
+* Actions should be bounded by product permissions and safety requirements.
+* Planning is useful because it exposes intent before execution.
+* Execution needs ordinary distributed systems engineering: idempotency, retries, cancellation, queues, logs, and rate limits.
+* Most production agents should combine deterministic workflow structure with bounded LLM-driven decisions.
+* The main failure pattern is compounding error across steps.
+* Safe autonomy is designed through constraints, not hoped for through prompting.
+
+---
+
+# 13. Bridge to Chapter 4
+
+Agents need evaluation more than single-prompt systems because quality is trajectory-level, not just output-level.
+
+It is not enough to ask whether the final answer looked good. You need to know whether the agent chose the right tools, used evidence correctly, respected budgets, stopped for the right reason, avoided unsafe actions, and recovered from failures.
+
+This makes evaluation harder in several ways:
+
+* trajectories are variable-length, so you cannot just compare two strings
+* intermediate decisions matter, not only the final output
+* cost, latency, and tool-call counts are part of quality
+* failure modes are combinatorial across steps
+* regression detection must cover new behavior paths, not just old golden answers
+
+Chapter 4 turns this into an evaluation problem: how to measure agent behavior, catch regressions, compare trajectories, and decide whether a system is actually reliable enough to ship. Without strong evaluation, agent improvements are guesses — you cannot tell whether a change to the planner, tool set, or stopping rule actually helped across the distribution of real tasks.
+
+[Chapter 13](../chapter_13/guide.html) gives the infrastructure lens for agent systems. Each planning step, tool call, retrieval pass, retry, and validation loop consumes latency budget and can create queue pressure. Strong agent designs track step count, tool latency, token load, prefill/decode time, and cancellation behavior rather than only final answer quality.

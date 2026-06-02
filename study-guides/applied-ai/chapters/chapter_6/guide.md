@@ -1,22 +1,23 @@
 ---
 layout: page
-title: "Chapter 6: Production ML Systems"
+title: "Chapter 6: Learning Loops"
 guide_type: chapter
 ---
 
-This chapter turns learned behavior into a reliable product surface.
+# Chapter 6 — Learning Loops
 
-Chapter 5 answered: "How do learned systems improve?"
+This chapter explains how model behavior improves after deployment data, evaluation data, human feedback, and environment outcomes become training signal.
 
-This chapter answers: "How do I serve, scale, observe, and operate them without blowing up latency, reliability, or cost?"
+Chapter 0 framed optimization as signal shaping: choose an objective, expose the model to data, and update parameters so future behavior moves toward the objective. Chapter 5 applies that same primitive to systems that learn from interaction. The hard part is not saying "use RL" or "collect feedback." The hard part is deciding what signal should be trusted, how it should update the policy, and how to prevent the loop from optimizing the wrong thing.
 
-The interview angle is usually not "can you name Kubernetes and Redis." It is:
+The interview angle is:
 
-* can you decompose latency, throughput, cost, reliability, and availability?
-* can you explain where inference time is actually spent?
-* can you design serving paths with batching, queues, caches, routing, and fallbacks?
-* can you predict production failure modes before they appear in dashboards?
-* can you connect model behavior to infrastructure behavior?
+* can you decompose learning loops into reward, policy, value, feedback, exploration, and data?
+* can you explain when SFT, RLHF, DPO, reward modeling, bandits, or continual learning are appropriate?
+* can you identify the failure modes before the model learns bad behavior?
+* can you connect model improvement to production serving, monitoring, and safety gates?
+
+Security note: learning loops are also data-governance systems. Raw traces, user feedback, and model-generated data need privacy filtering, training eligibility decisions, and quarantine when a bad policy produced the data. See [Chapter 8: Security, Privacy, and Trust Boundaries](../chapter_8/guide.html) and the [Production Feedback Learning Loop capstone](../../capstones/production_feedback_learning_loop.html).
 
 ---
 
@@ -29,1485 +30,1737 @@ The interview angle is usually not "can you name Kubernetes and Redis." It is:
 
 # 1. The Core Mental Model
 
-A production ML system is not just a model behind an API.
+A learning loop is a system that turns observed behavior into future behavior.
 
-It is a control system around an expensive probabilistic function.
-
-The model is only one part of the runtime path. Around it are routers, queues, batchers, caches, workers, databases, tracing systems, rollout controls, autoscalers, and fallback policies.
-
-The simplest useful mental model is:
+The smallest version looks like this:
 
 ```text
-request
-  -> admission control
-  -> routing
-  -> cache lookup
-  -> batching / queueing
-  -> inference
-  -> postprocessing
-  -> logging / metrics / tracing
-  -> response
+policy produces behavior
+environment or users produce feedback
+feedback becomes training signal
+training updates the policy
+updated policy produces new behavior
 ```
 
-Every step changes the system's behavior.
+This is the same optimization story from Chapter 0, but with a new source of signal. Instead of only learning from a static dataset, the system can learn from preferences, rewards, outcomes, corrections, traces, tool results, or user interactions.
 
-Routing changes which model sees the request. Batching changes latency and GPU utilization. Caching changes cost and tail latency. Queues absorb bursts but can hide overload. Retries improve transient reliability but can multiply traffic. Observability does not serve the request, but without it the system becomes impossible to operate.
+That makes learning loops powerful and dangerous.
 
-The production question is never just "does the model work?"
+They are powerful because production data contains information that the original training set did not have. They are dangerous because production data is biased, delayed, incomplete, adversarial, and shaped by the current model's behavior. A model that learns from its own bad outputs can become more confident in the wrong direction.
 
-It is:
+The central question is not "how do we update the model?" It is:
 
-* can the model work under real traffic?
-* can the system keep working when dependencies fail?
-* can operators see what is happening?
-* can the team deploy changes without taking down users?
-* can the business afford the resulting token and GPU spend?
+```text
+What feedback should be allowed to change future behavior?
+```
+
+Every serious answer to RLHF, preference optimization, online learning, or continual learning is a variation on that question.
 
 ---
 
-# 2. Production Primitives
+# 2. Core Primitives
 
-Production ML systems are built from a small number of operational primitives. These primitives are simple individually, but they interact in non-obvious ways.
+## 2.1 Reward
 
-## 2.1 Latency
+A reward is a scalar signal that says how good an action, answer, trajectory, or outcome was.
 
-Latency is the time a user waits for a result.
+In a game, reward might be +1 for winning. In a recommender, it might be click-through, watch time, purchase conversion, or long-term retention. In an LLM assistant, it might be a learned score from a reward model, a human preference label, a task success signal, or a safety-adjusted quality score.
 
-For LLM systems, latency has several parts:
+The key idea:
 
-* request parsing and authentication
-* routing and policy checks
-* prompt construction or retrieval
-* queueing delay
-* prefill time
-* decode time
-* streaming overhead
-* postprocessing and validation
-* network time
+```text
+reward is not the same as correctness
+```
 
-Two latency numbers matter most:
+Reward is a proxy. It compresses a messy human or environment judgment into an optimization target. That compression is useful because gradient-based learning needs a target, but it is risky because the target can be incomplete or wrong.
 
-* **time to first token**, often dominated by routing, queueing, prompt construction, and prefill
-* **time to final token**, often dominated by decode length and output token rate
+From Chapter 0's view, reward is objective shaping. If the reward is misspecified, optimization will amplify the misspecification.
 
-This distinction is important because streaming can make a slow response feel responsive. A user may tolerate eight seconds to complete if the first token arrives in 500 milliseconds. They may abandon a request if nothing appears for four seconds, even if the final completion would have arrived soon after.
+## 2.2 Policy
+
+A policy is the behavior-producing function.
+
+In classic RL, the policy maps state to action:
+
+```text
+pi(a | s)
+```
+
+In an LLM, the policy maps context to a distribution over next tokens:
+
+```text
+pi(token | prompt, previous_tokens)
+```
+
+When people say "the policy model" in RLHF, they usually mean the LLM being updated. The model is not merely storing facts; it is a conditional action distribution. Post-training changes which completions, tool calls, refusals, explanations, and styles are likely under different contexts.
+
+## 2.3 Value
+
+Value estimates how good a state or partial trajectory is expected to be.
+
+In RL notation:
+
+```text
+V(s) = expected future reward from state s
+Q(s, a) = expected future reward after taking action a in state s
+```
+
+Value matters when feedback is delayed. If an agent takes ten steps and only receives final success or failure, value estimation helps assign credit to earlier decisions.
+
+For LLM systems, value-like ideas appear in:
+
+* process reward models that score intermediate reasoning steps
+* rollout evaluators that estimate whether a partial solution is promising
+* agents that choose which branch to continue exploring
+* rerankers that estimate final answer quality before returning an answer
+
+## 2.4 Advantage
+
+Advantage measures whether an action was better or worse than expected:
+
+```text
+A(s, a) = Q(s, a) - V(s)
+```
+
+If the outcome was good but every available action was likely to be good, the advantage may be small. If the outcome was much better than expected, the advantage is large.
+
+Advantage is useful because it reduces noise. Instead of reinforcing every token in a successful response equally, the learner tries to reinforce choices that improved the outcome relative to a baseline.
 
 Interview framing:
 
-> I would break latency into queueing, prefill, decode, orchestration, dependency calls, and network overhead. Then I would decide whether the target is time to first token, time to final token, or background completion time.
+* reward says "how good was this?"
+* value says "how good did we expect this situation to be?"
+* advantage says "did this action outperform expectation?"
 
-## 2.2 Throughput
+## 2.5 Feedback
 
-Throughput is how much work the system completes per unit time.
+Feedback is the raw observation that can become learning signal.
 
-For normal web services, throughput is often measured in requests per second. For LLM serving, request count alone is misleading because requests have different token lengths.
+Common feedback sources include:
 
-Better units include:
+* explicit human preference: response A is better than response B
+* rating: thumbs up, star score, CSAT
+* correction: user edits the answer
+* outcome: task succeeded or failed
+* tool result: code compiled, test passed, API call succeeded
+* safety review: output violated or satisfied policy
+* behavioral metric: click, dwell time, conversion, churn
 
-* input tokens per second
-* output tokens per second
-* requests per second by request class
-* GPU tokens per second
-* successful tasks per dollar
+Feedback is not automatically reward. It must be interpreted. A user clicking a result may mean relevance, curiosity, manipulation, or bad UI placement. A thumbs up may mean the answer sounded good, not that it was correct. A rejected support answer may be bad because of content, tone, latency, or user frustration outside the model.
 
-A system can have high request throughput but poor token throughput if every request is tiny. It can also have high token throughput but poor user experience if batching creates unacceptable queueing delay.
+Good learning systems separate raw feedback from trusted training signal.
 
-Throughput improves when the system uses hardware efficiently. In LLM serving, that usually means better batching, better KV-cache management, less idle GPU time, fewer redundant prefill computations, and more predictable request shapes.
+## 2.6 Exploration vs Exploitation
 
-## 2.3 Cost
+Exploitation means choosing the behavior that currently looks best. Exploration means trying uncertain behavior to learn whether something better exists.
 
-Cost is the resource bill required to serve the workload.
+In production systems, exploration has a cost. Showing users worse recommendations, testing a new model response style, or routing traffic to an experimental policy can harm user experience. But without exploration, the system can get stuck optimizing for what it already knows.
 
-In production LLM systems, cost comes from:
+Common exploration patterns:
 
-* GPU time
-* CPU orchestration
-* memory and storage
-* network transfer
-* vector database or retrieval infrastructure
-* logging and tracing volume
-* external model API calls
-* engineering and operational complexity
+* epsilon-greedy action choice
+* Thompson sampling
+* upper confidence bound methods
+* randomized ranking
+* shadow traffic for model candidates
+* limited canary rollout
+* offline evaluation before online exposure
 
-Token cost is often the dominant variable. Long prompts increase prefill work. Long outputs increase decode work. Retries multiply both. Agent loops multiply them again.
+LLM systems often explore less directly than recommender systems. They may generate multiple candidate answers offline, label preferences, use rejection sampling, or run small canaries with strict safety gates.
 
-Cost should be discussed as a product constraint, not just an infrastructure concern. A feature that requires ten model calls per user action may work technically but fail economically.
+## 2.7 Trajectory Data
 
-## 2.4 Reliability
+A trajectory is a sequence of states, actions, observations, and rewards.
 
-Reliability is the probability that the system behaves correctly over time.
+For a tool-using LLM agent, a trajectory might include:
 
-For ML systems, reliability includes normal distributed-systems reliability and model-specific reliability:
+```text
+user request
+model plan
+tool call
+tool result
+model revision
+final answer
+user feedback
+```
 
-* service returns a response
-* response meets latency SLO
-* response is generated by the intended model version
-* response follows the expected schema or policy
-* fallback behavior is acceptable
-* metrics and traces are recorded
+Trajectory data matters because the final answer alone hides the path that produced it. If an agent fails, you need to know whether the failure came from retrieval, planning, tool selection, tool output interpretation, memory, or final response generation.
 
-A reliable ML system does not assume the model is always correct. It wraps inference in validation, timeouts, fallbacks, rollout controls, and measurement.
+Strong trajectory logging records:
 
-## 2.5 Availability
+* input context and prompt version
+* model version and sampling parameters
+* candidate outputs
+* tool calls and observations
+* intermediate decisions
+* final response
+* feedback and outcome
+* safety filters and policy decisions
 
-Availability is the fraction of time the system can serve requests.
-
-A system can be available but degraded. For example, a product may remain online by routing users from a high-quality large model to a cheaper smaller fallback. Availability remains high, while quality drops.
-
-This is often the right production choice. The system should make degradation explicit:
-
-* full service
-* slower but correct service
-* cheaper fallback model
-* cached response
-* partial result
-* graceful error
-
-The important design question is not "can we avoid all failures?" It is "when a failure happens, what does the user see, what do operators see, and how quickly can the system recover?"
-
-## 2.6 Failure Modes
-
-A failure mode is a way the system breaks.
-
-Production ML systems fail through interactions:
-
-* a traffic spike increases queueing
-* queueing increases latency
-* clients retry
-* retries increase traffic
-* longer queues reduce batching quality
-* GPU memory fragments or OOMs
-* autoscaling starts too slowly
-* dashboards show symptoms but not root cause
-
-Strong system design answers name these cascades. Weak answers list isolated components.
+This data is the raw material for evaluation, reward modeling, debugging, and future training.
 
 ---
 
-# 3. The Serving System
+# 3. How the Primitives Compose
 
-A production inference system has two jobs:
-
-1. turn requests into model executions
-2. turn model executions into reliable product behavior
-
-The first job is about serving mechanics. The second is about operational control.
-
-For a small product, serving may look like:
+A learning loop composes the primitives into a control system:
 
 ```text
-API server -> model API provider -> response
+policy -> actions -> trajectory -> feedback -> reward estimate -> update decision -> policy
 ```
 
-For a high-scale or low-latency system, it may look like:
+The composition is easy to draw and hard to operate.
+
+The policy creates data. That data is not neutral because it reflects the current policy's strengths and weaknesses. Users react to that behavior, producing feedback. The system converts feedback into reward estimates or preferences. Training uses those estimates to update the policy. Then the new policy changes which data will be observed next.
+
+This creates two nested loops:
 
 ```text
-API gateway
-  -> request router
-  -> Redis cache
-  -> priority queue
-  -> batcher
-  -> GPU inference workers
-  -> streaming response channel
-  -> metrics/logging/tracing
-  -> Postgres audit record
+inner loop: model generates behavior for a request
+outer loop: collected behavior changes future model behavior
 ```
 
-The key design principle is separation of concerns.
+Chapter 4 evaluation data becomes especially important here. Evaluation tells you whether a candidate update improves the behavior you care about before you expose it broadly. Without evaluation gates, the outer learning loop can turn noisy production feedback into durable model regression.
 
-The API layer should not know every GPU detail. The model worker should not own business routing policy. The metrics system should not be an afterthought. The cache should not silently change correctness. Each component should have a clear responsibility and a clear failure policy.
+## Reference-Guided Updates
+
+A recurring learning-loop pattern is to update a fast learner against a slower, frozen, delayed, privileged, or filtered reference process.
+
+This is not a new primitive beside reward, policy, value, feedback, or trajectory data. It is a way those primitives compose.
+
+The reference can act as:
+
+* an **objective source**, such as teacher logits, pseudo-labels, reward-model scores, or search-generated targets,
+* a **constraint**, such as a KL penalty to an old policy or frozen reference model,
+* a **credit-assignment aid**, such as a critic, verifier, value estimate, or token-level relevance mask,
+* an **information-flow device**, such as a checkpoint, EMA copy, privileged-context teacher, or delayed target network.
+
+The practical reason is stability. If the learner chases targets produced by its own rapidly changing behavior, training can oscillate, collapse, or amplify mistakes. A slower reference gives the update a target that changes less quickly than the learner.
+
+There are really three different benefits that often get blended together:
+
+1. **Stability:** the reference changes slowly, so targets do not drift as quickly as the learner.
+2. **Asymmetry:** the reference has information the learner does not have, such as privileged context, search results, human preference data, or a larger model's distribution.
+3. **Selectivity:** the reference helps decide which parts of behavior deserve update pressure, such as value estimates for actions or token masks for relevant disagreements.
+
+Those are different reasons. A DQN target network is mostly about stability. A large teacher model is mostly about asymmetry. RMSD is mostly about selectivity on top of asymmetry. A good explanation says which reason applies instead of treating all reference models as the same thing.
+
+A generic loop looks like:
+
+```text
+fast learner produces behavior
+slow/frozen/privileged reference scores, anchors, or generates targets
+loss compares learner behavior to the reference-guided signal
+learner updates
+reference updates rarely, by EMA, checkpoint promotion, or not at all
+```
+
+This pattern includes RL target networks, PPO old-policy snapshots, RLHF reference models, teacher-student distillation, self-distillation, and verifier/search processes that are distilled into faster policies.
+
+The failure mode depends on the role. If the reference is an objective source, a bad teacher teaches bad behavior. If it is a constraint, a too-strong reference prevents useful learning and a too-weak reference allows drift. If it is a credit-assignment aid, wrong attribution sends gradients to the wrong tokens, actions, or examples. If it is an information-flow device, stale or contaminated checkpoints preserve the wrong signal.
 
 ---
 
-# 4. System Components
+# 4. Training and Post-Training Pipeline
 
-## 4.1 Inference Service
+Modern LLM improvement is usually not one training method. It is a pipeline.
 
-The inference service is the runtime that executes the model.
-
-It is responsible for:
-
-* loading weights
-* managing device memory
-* tokenizing inputs
-* scheduling inference work
-* generating outputs
-* returning tokens or final completions
-
-For LLMs, the inference service must handle prefill, decode, KV cache, batching, streaming, and cancellation. This is why specialized serving stacks such as vLLM, TensorRT-LLM, and Hugging Face Text Generation Inference exist.
-
-An interview answer should distinguish between a generic web server and an inference server. The web server handles HTTP. The inference server handles GPU scheduling and model execution.
-
-### Prefill vs Decode
-
-LLM inference has two different phases.
-
-**Prefill** is the stage where the model reads the input prompt.
+The common shape is:
 
 ```text
-prompt tokens -> forward pass -> initial KV cache
+pretraining -> SFT -> preference data -> reward/preference optimization -> evaluation -> deployment -> monitoring -> data collection
 ```
 
-Prefill determines much of **time to first token**. It is relatively compute-heavy because the full prompt is available and can be processed in parallel.
+## A Distributional View of Post-Training
 
-**Decode** is the stage where the model generates new tokens one at a time.
+A useful way to compare post-training methods is to ask:
 
 ```text
-previous tokens + KV cache -> next token -> append to KV cache
+What distribution is this update trying to move the policy toward?
 ```
 
-Decode determines much of **time to final token**. It is sequential and often memory-bandwidth-heavy because each step reads model weights and cached attention state.
+An LLM policy is a distribution over next tokens and full responses. Post-training changes the shape of that distribution. Different methods differ in what they treat as the target and how directly they pull the model toward it.
 
-This distinction matters because the two phases stress hardware differently:
+SFT has the clearest target. The dataset defines an external demonstration distribution, and cross-entropy training pulls the model toward the demonstrated tokens. This is useful when the model needs to learn a new format, task pattern, or behavior from examples. The risk is that the target distribution may be far from the model's original behavior, so the update can create broad pressure on unrelated capabilities.
 
-| Phase | Main pressure | User-facing metric |
-| ----- | ------------- | ------------------ |
-| Prefill | compute over prompt tokens | time to first token |
-| Decode | memory bandwidth and KV-cache reads | tokens per second / time to final token |
+RL is less imitation-like. The model samples from its own current policy, receives reward, and shifts probability toward actions or trajectories that scored better than expected. The target is not a fixed answer key. It is a reward-shaped improvement near the states the current policy actually visits.
 
-### KV Cache Mechanics
+On-policy distillation sits between the two. Like SFT, it uses a teacher signal. Like RL, the training contexts come from the student's own rollouts. The student is not merely copying an external dataset; it is receiving guidance on its own prefixes, mistakes, and local alternatives.
 
-During autoregressive decoding, future tokens need old keys and values.
+That gives an interview-useful distinction:
 
-They do not need old queries.
+| Method | Training Data Comes From | Main Signal | Update Shape |
+| ------ | ------------------------ | ----------- | ------------ |
+| SFT | fixed external demonstrations | target tokens | imitate the dataset distribution |
+| DPO / preference optimization | fixed preference pairs | chosen over rejected responses | shift likelihood toward preferred examples while anchored to a reference |
+| RLHF / RL | policy rollouts | reward or advantage | reinforce higher-reward behavior under the current policy distribution |
+| On-policy distillation | student rollouts | teacher logits or corrections | refine the student's local distribution toward a teacher |
 
-Mental model:
+This lens helps explain catastrophic forgetting. External datasets can pull the model toward behavior that is far from the starting policy. On-policy methods constrain the update to regions the model already visits, so the nearest task-solving behavior is often easier to learn without damaging unrelated behavior. That does not make on-policy methods automatically safe; the reward, teacher, or preference signal can still be biased. But it explains why data source matters, not only objective choice.
+
+## 4.1 Supervised Fine-Tuning
+
+Supervised fine-tuning trains the model to imitate desired outputs:
 
 ```text
-for each new token:
-  compute Q_t, K_t, V_t
-  append K_t and V_t to cache
-  attend Q_t over cached K/V
+prompt -> ideal response
 ```
 
-Without a KV cache, every new token would recompute K and V for all previous tokens. With a KV cache, each token's K/V is computed once and reused.
+SFT is useful when you can write or collect high-quality demonstrations. It teaches format, task behavior, domain style, and instruction following.
 
-The cache grows with:
-
-* number of layers,
-* sequence length,
-* batch size / active requests,
-* number of KV heads,
-* head dimension,
-* precision.
-
-This is why long-context serving becomes a memory problem even when the model weights fit on the GPU.
-
-### Chunked Prefill
-
-Long prompts can monopolize GPU compute during prefill.
-
-Chunked prefill breaks a long prompt into smaller chunks so the serving engine can interleave prefill work with decode work from other requests.
-
-Mental model:
-
-```text
-one huge prefill
-  -> blocks other requests
-
-chunked prefill
-  -> process prompt in pieces
-  -> interleave with decode
-```
-
-The benefit is better latency fairness. The cost is more scheduling complexity.
-
-### Prefix Caching
-
-Many prompts share prefixes:
-
-* system prompts,
-* tool instructions,
-* few-shot examples,
-* policy text,
-* repeated templates.
-
-Prefix caching reuses the KV cache for identical prompt prefixes.
-
-Mental model:
-
-```text
-shared prefix -> cached K/V -> skip repeated prefill work
-```
-
-This can improve time to first token and reduce compute, but the cache key must include correctness-relevant dimensions:
-
-* model version,
-* tokenizer,
-* prompt text,
-* system/developer instructions,
-* tenant or permission scope when relevant.
-
-### PagedAttention / Paged KV Cache
-
-Naive KV cache allocation wants contiguous memory per request.
-
-That is inefficient because requests:
-
-* have different prompt lengths,
-* generate different numbers of tokens,
-* finish at different times,
-* grow dynamically.
-
-PagedAttention treats KV cache memory more like operating-system paging:
-
-```text
-logical token sequence
-  -> fixed-size physical KV blocks
-```
-
-This reduces fragmentation and lets memory from finished requests be reused more flexibly.
-
-### Continuous Batching
-
-Static batching groups a fixed set of requests together.
-
-The problem:
-
-```text
-some requests finish early
-  -> empty slots remain
-  -> GPU utilization drops
-```
-
-Continuous batching treats the active batch as a changing pool. As requests finish, new requests enter.
-
-This keeps the GPU busier and is one reason modern LLM serving engines can achieve much higher throughput than naive batching.
-
-### KV Cache Quantization
-
-Quantization stores values in lower precision.
-
-For a real value $x$, a simple quantization mental model is:
-
-```text
-real value -> scale and integer code -> approximate real value
-```
-
-KV cache quantization reduces VRAM and memory bandwidth pressure during decode.
+SFT is often the first post-training stage because it moves the base model into the right behavioral region. RL or preference optimization then refines choices within that region.
 
 Tradeoff:
 
-* lower memory use,
-* better throughput or concurrency,
-* possible quality degradation,
-* more implementation complexity.
+* SFT is stable and simple.
+* SFT requires demonstration data.
+* SFT teaches what to imitate, not necessarily what humans prefer among plausible alternatives.
 
-### Speculative Decoding
+## 4.2 Reward Modeling
 
-Speculative decoding uses a smaller draft model to propose tokens and a larger target model to verify them.
+A reward model learns to score outputs.
 
-Mental model:
-
-```text
-draft model proposes several tokens
-  -> target model checks them in parallel
-  -> accepted tokens are emitted
-  -> rejected tokens are corrected
-```
-
-The goal is to reduce the number of slow sequential target-model decode steps.
-
-It works best when:
-
-* the draft model is much faster,
-* the draft model's tokens are often accepted,
-* decode is the bottleneck,
-* orchestration overhead is low.
-
-### Disaggregated Prefill and Decode
-
-Prefill and decode have different resource profiles.
-
-Disaggregated serving runs them on separate pools:
+Instead of asking humans to assign perfect scalar rewards, systems often ask humans to compare outputs:
 
 ```text
-prefill workers: compute-heavy prompt processing
-decode workers: memory-bandwidth-heavy token generation
+prompt
+response A
+response B
+label: B is better
 ```
 
-Benefits:
+The reward model is trained so preferred responses receive higher scores than rejected responses. Once trained, it can score many model outputs cheaply.
 
-* scale prefill and decode independently,
-* reduce interference between long prompts and generation,
-* tune hardware or scheduling per phase.
+Reward models are useful because human labeling is expensive. They also introduce a new risk: if the reward model is wrong, the policy can learn to exploit it.
 
-Cost:
+## 4.3 RLHF
 
-* KV cache transfer between pools,
-* more complex scheduling,
-* more failure modes.
+RLHF stands for reinforcement learning from human feedback.
+
+A simplified RLHF pipeline:
+
+```text
+1. Train or start with an instruction-following policy.
+2. Generate multiple responses to prompts.
+3. Collect human preferences between responses.
+4. Train a reward model from preferences.
+5. Optimize the policy to maximize reward model score.
+6. Keep the updated policy close to the reference model with a KL penalty.
+7. Evaluate, safety test, and deploy only if gates pass.
+```
+
+The KL penalty matters. Without it, the policy may drift into strange outputs that exploit the reward model. The reference model acts as an anchor.
+
+RLHF is powerful when:
+
+* quality depends on subjective human preference
+* there are many plausible answers
+* demonstrations are expensive
+* ranking answers is easier than writing perfect answers
+
+RLHF is risky when:
+
+* the reward model does not capture truth or safety
+* labels reward style over substance
+* the policy can exploit reward-model blind spots
+* the update is not gated by strong evals
+
+## 4.4 DPO and Preference Optimization
+
+Direct Preference Optimization, or DPO, optimizes directly from preference pairs without training a separate reward model in the same way as classic RLHF.
+
+The training data still looks like:
+
+```text
+prompt
+chosen response
+rejected response
+```
+
+But the optimization objective directly increases the likelihood of the chosen response relative to the rejected response, while staying anchored to a reference policy.
+
+The practical appeal:
+
+* simpler than full RLHF
+* more stable for many post-training workflows
+* no online rollout loop required for the training step
+* works well with curated preference datasets
+
+The limitation:
+
+* it is still only as good as the preference data
+* it does not automatically solve exploration
+* it can overfit to superficial preference patterns
+* it may not optimize long-horizon interactive behavior as naturally as RL
+
+In interviews, a clean distinction is:
+
+```text
+RLHF learns a reward model and then optimizes the policy against it.
+DPO directly trains the policy from chosen-vs-rejected examples.
+```
+
+## 4.5 Parameter-Efficient Fine-Tuning: LoRA and Adapters
+
+Full fine-tuning updates all or most of the model's weights.
+
+That is powerful, but expensive:
+
+* every trainable parameter needs gradient memory,
+* optimizer states can be larger than the weights,
+* checkpoints are large,
+* deployment artifacts are heavy,
+* the update can damage broad capabilities if the dataset is narrow.
+
+Parameter-efficient fine-tuning, or PEFT, asks a different question:
+
+```text
+Can we adapt the model by training a small number of extra parameters
+while keeping the base model mostly frozen?
+```
+
+This changes the **parameterization of the update**. Instead of letting optimization move the entire model, PEFT constrains where learning can happen.
+
+### The Core Mental Model
+
+The base model already contains broad capability.
+
+PEFT adds a small learned modification:
+
+```text
+frozen base model
+  + small trainable adaptation
+  -> adapted behavior
+```
+
+So the model does not relearn language, reasoning, or world knowledge from scratch. It learns a targeted behavioral shift.
+
+This is why PEFT sits naturally in post-training and continual learning:
+
+* you already have a pretrained or instruction-tuned base model,
+* you want a domain/task/style adaptation,
+* you want to reduce training cost and blast radius,
+* you still need eval gates because the behavior changed.
+
+### LoRA
+
+LoRA stands for low-rank adaptation.
+
+The intuition:
+
+Full fine-tuning changes a weight matrix:
+
+```text
+W -> W + Delta W
+```
+
+LoRA represents the update with two much smaller low-rank matrices:
+
+```text
+Delta W = A B
+```
+
+where `A` and `B` are trainable, but the original weight matrix `W` is frozen.
+
+The practical mental model:
+
+```text
+frozen base weights + small trainable low-rank adapters
+```
+
+During training, gradients update the adapter matrices. During inference, the adapter modifies the layer's behavior. Depending on the system, the adapter can be kept separate or merged into the base weights for deployment.
+
+### Why Low-Rank Helps
+
+Many useful task-specific updates do not need to move the model in every possible parameter direction.
+
+LoRA assumes the useful update can be approximated in a lower-dimensional subspace.
+
+That gives:
+
+* fewer trainable parameters,
+* lower optimizer memory,
+* smaller checkpoints,
+* faster experiments,
+* easier per-domain adapters,
+* less infrastructure cost than full fine-tuning.
+
+### Adapters More Broadly
+
+LoRA is one PEFT method. The broader adapter family includes methods that add small trainable modules, prompt-like parameters, prefix parameters, or other constrained update paths.
+
+The shared idea:
+
+```text
+freeze most of the model
+train a small controlled adaptation
+```
+
+Different methods place the trainable capacity in different places. Some modify attention projections. Some add modules between layers. Some learn prefix/prompt representations. The details differ, but the design question is the same:
+
+> Where should optimization be allowed to change the model?
+
+### Top PEFT Techniques
+
+The main PEFT methods differ by **where** they add trainable parameters.
+
+Full fine-tuning says:
+
+```text
+update the model weights directly
+```
+
+PEFT methods say:
+
+```text
+freeze most or all base weights
+add a small trainable path
+let that path steer behavior
+```
+
+That small path can live inside weight matrices, inside attention state, near the input embeddings, or as scaling vectors over internal activations.
+
+#### LoRA: Low-Rank Adaptation
+
+LoRA is the most widely used PEFT method because it gives a strong cost-to-quality tradeoff and is easy to deploy.
+
+The core idea is that a large weight update can often be approximated by a lower-rank update.
+
+Instead of training a full matrix update:
+
+```text
+W -> W + Delta W
+```
+
+LoRA freezes `W` and learns:
+
+```text
+Delta W = A B
+```
+
+where `A` and `B` are much smaller trainable matrices.
+
+If the original matrix is large, this can reduce trainable parameters dramatically. The exact savings depend on the layer size and chosen rank, but the practical effect is often that you train a small fraction of the parameters instead of the whole model.
+
+For a weight matrix:
+
+```text
+W has shape d_out x d_in
+```
+
+full fine-tuning can update:
+
+```text
+d_out * d_in parameters
+```
+
+LoRA learns two smaller matrices:
+
+```text
+A has shape d_out x r
+B has shape r x d_in
+```
+
+so the trainable parameter count is:
+
+```text
+r * (d_out + d_in)
+```
+
+where `r` is the rank. When `r` is much smaller than `d_in` and `d_out`, the adapter is much cheaper than the original matrix.
+
+The mental model:
+
+```text
+base model knows the broad capability
+LoRA learns a small direction for the task/domain/style shift
+```
+
+LoRA is often applied to attention projection matrices such as query, key, value, or output projections, and sometimes to MLP layers. The rank is a capacity knob:
+
+* lower rank means cheaper and more constrained,
+* higher rank means more adaptation capacity but more memory and overfitting risk.
+
+Common target modules include:
+
+* **query/value projections**, when the adaptation mostly needs to change what the model attends to and how it retrieves information from context,
+* **all attention projections**, when the task needs a broader change to attention behavior,
+* **MLP/up/down projections**, when the adaptation needs more capacity to change internal transformations,
+* **output heads or task-specific layers**, in smaller or specialized architectures.
+
+Choosing target modules is a real modeling decision. Training LoRA only on `q_proj` and `v_proj` is cheaper and often works well. Training LoRA on attention and MLP layers gives more capacity but increases memory, training time, and overfitting risk.
+
+Several practical knobs matter:
+
+* **rank (`r`)** controls adapter capacity,
+* **alpha** scales the LoRA update relative to the frozen base weights,
+* **dropout** can regularize the adapter,
+* **target layers** control where the model is allowed to change,
+* **merge behavior** determines whether the adapter stays separate or is folded into the base weights for inference.
+
+The deployment advantage is important. A team can keep one large frozen base model and load different LoRA adapters for different customers, domains, tasks, or experiments:
+
+```text
+base model
+  + support-ticket LoRA
+  + legal-formatting LoRA
+  + code-style LoRA
+```
+
+That is much cheaper than storing and serving three full model copies.
+
+LoRA is useful when the base model can already perform the task but needs targeted behavior change. It is weaker when the base model lacks the underlying capability or when the update needs broad changes across many behaviors.
+
+Failure modes:
+
+* the rank is too low, so the adapter cannot express the needed change,
+* the rank is too high, so the adapter overfits a narrow dataset,
+* the wrong layers are targeted, so the update has capacity in the wrong place,
+* the adapter is paired with the wrong base model or tokenizer,
+* the adapter learns formatting/style while factual quality does not improve,
+* multiple adapters interact poorly if composed without validation.
 
 Interview framing:
 
-> I would reason about LLM serving by separating prefill and decode. Prefill is prompt processing and initial KV-cache construction; decode is sequential token generation and KV-cache reading. Optimizations like chunked prefill, prefix caching, PagedAttention, continuous batching, KV quantization, speculative decoding, and disaggregated prefill/decode each target a different bottleneck.
+> LoRA is a constrained way to fine-tune. Instead of updating a full weight matrix, it freezes the base matrix and learns a low-rank delta. That reduces trainable parameters, optimizer state, and checkpoint size. The key tradeoff is capacity: low-rank updates are efficient, but the rank and target modules determine whether the adapter can express the behavior change.
 
-### Quantitative Serving Math: Roofline Intuition
+#### Prefix Tuning
 
-A useful first-pass model for one forward pass is:
+Prefix tuning does not primarily change the model's normal weights.
 
-$$
-T = \max(t_{\text{compute}}, t_{\text{mem}})
-$$
+Instead, it learns extra continuous vectors that are inserted into the attention mechanism as a prefix. You can think of these vectors as learned "virtual tokens" that every layer can attend to.
 
-The system is limited by whichever is slower: math or memory movement.
+In a transformer attention layer, the model forms keys and values from the input. Prefix tuning adds trainable prefix keys and values:
 
-Ignoring attention compute for a simple estimate:
+```text
+attention over:
+  learned prefix keys/values
+  + normal prompt keys/values
+```
 
-$$
-t_{\text{compute}} = \frac{B \cdot N_{\text{active}}}{\text{FLOPs}}
-$$
+The base model stays frozen. The learned prefix changes what information is available inside attention, which can steer the model toward a task, style, or domain.
 
-Where:
+The intuition:
 
-* $B$ is batch size,
-* $N_{\text{active}}$ is the number of parameters active for a token,
-* FLOPs is hardware compute throughput.
+```text
+Instead of rewriting the model,
+learn a task-specific attention context that the model carries through generation.
+```
 
-Memory time has two main pieces:
+Prefix tuning is more expressive than plain text prompting because the prefix vectors are continuous learned parameters, not human-readable tokens. It can be especially useful when you want task-specific behavior but want to keep one frozen base model.
 
-$$
-t_{\text{mem}} =
-\frac{N_{\text{total}} + B \cdot L_{\text{ctx}} \cdot \text{KV}_{\text{bytes/token}}}{\text{mem\_bw}}
-$$
+The important distinction is that prefix tuning conditions the model through the **attention path**, not by changing normal model weights. The learned prefix can be interpreted as persistent task-specific memory that the model can attend to at each layer.
 
-Where:
+There are two ways to think about it:
 
-* $N_{\text{total}}$ is the total model weight footprint that must be read,
-* $L_{\text{ctx}}$ is context length,
-* $\text{KV}_{\text{bytes/token}}$ is KV-cache storage per token,
-* $\text{mem\_bw}$ is memory bandwidth.
+```text
+human prompt:
+  readable instructions in token space
 
-This simple equation explains several production facts:
+prefix tuning:
+  learned instructions in attention-state space
+```
 
-* small batches are expensive because weight reads are not amortized,
-* larger batches improve cost per token until compute or KV-cache reads dominate,
-* decode is often memory-bandwidth-bound,
-* long context becomes expensive because KV-cache reads grow with context length,
-* output tokens are often more expensive than input tokens because decode cannot parallelize over many positions like prefill.
+In many formulations, the prefix is not just added once at the input. Learned key/value vectors can be supplied to multiple transformer layers, which gives the prefix a deeper influence than a short natural-language instruction at the front of the prompt.
+
+This makes prefix tuning attractive when:
+
+* the task can be represented as a reusable conditioning pattern,
+* you want to avoid changing base weights,
+* you want one adapter-like object per task,
+* the model already has the relevant knowledge,
+* the desired change is more about behavior, formatting, or task framing than new facts.
+
+Example:
+
+```text
+base model:
+  general instruction-following model
+
+prefix:
+  task-specific attention context for summarizing legal contracts
+
+result:
+  same base model behaves as if it has a learned task instruction
+```
+
+Prefix length is the main capacity knob. A longer prefix gives the adapter more room to encode task information, but it also increases attention work and can reduce effective context budget.
+
+The tradeoff is that prefix tuning consumes effective context/attention capacity and may be less straightforward to merge into the base model than LoRA-style weight deltas. It can also be harder to inspect because the learned prefix is not readable text.
+
+Failure modes:
+
+* the prefix is too short to encode the task,
+* the prefix is too long and wastes context or attention capacity,
+* the learned conditioning overfits the training format,
+* the base model ignores or underuses the prefix,
+* the prefix steers style but not correctness,
+* serving infrastructure does not handle prefix KV state efficiently.
+
+Interview framing:
+
+> Prefix tuning freezes the model and learns continuous key/value-like prefixes that condition attention. It is like giving the model learned task context at the attention level. It is more powerful than a hand-written prompt but usually less like a weight update than LoRA. The main tradeoff is cheap modular adaptation versus extra attention/context overhead and limited interpretability.
+
+#### Prompt Tuning and P-Tuning
+
+Prompt tuning and P-tuning also learn prompt-like parameters, but they usually operate closer to the input side of the model.
+
+Instead of hand-writing a prompt like:
+
+```text
+You are a helpful assistant. Answer in JSON.
+```
+
+prompt tuning learns soft prompt embeddings:
+
+```text
+[learned embedding 1, learned embedding 2, ...] + user input
+```
+
+These learned embeddings are continuous vectors. They do not need to correspond to real vocabulary tokens.
+
+The mental model:
+
+```text
+hard prompt: human-written text tokens
+soft prompt: trainable embedding vectors
+```
+
+Prompt tuning is usually very parameter-efficient because only the soft prompt is trained. That makes it cheap and modular, but also limits how much behavior it can change. It tends to work better when the base model is large and already instruction-capable.
+
+Prompt tuning is closest in spirit to normal prompting:
+
+```text
+normal prompting:
+  choose discrete tokens by hand
+
+prompt tuning:
+  optimize continuous prompt embeddings with gradient descent
+```
+
+The model sees the learned embeddings as part of the input sequence. During training, the base model stays frozen and gradients update only the prompt embeddings. The prompt becomes a small learned artifact that can be stored and loaded for a task.
+
+This is very cheap:
+
+```text
+trainable parameters =
+  number of soft prompt tokens * embedding dimension
+```
+
+For a large model, that can be tiny compared with LoRA or full fine-tuning.
+
+Prompt tuning works best when:
+
+* the base model is large and already capable,
+* the task is mostly about eliciting existing behavior,
+* the desired output format is consistent,
+* the training data is task-specific but not huge,
+* you need many tiny task adapters.
+
+It is weaker when:
+
+* the model needs new domain knowledge,
+* the task requires deep behavior change,
+* the base model is small or not instruction-tuned,
+* the input format varies widely,
+* the prompt must compete with long user context.
+
+The main intuition:
+
+```text
+Prompt tuning does not teach the model much new behavior.
+It learns how to ask the frozen model for the behavior it already has.
+```
+
+P-tuning is a related family of methods that improves the expressiveness of learned prompts, often by using learned prompt encoders or placing trainable prompt representations in ways that better condition the model. The exact variants differ, but the shared idea is:
+
+```text
+learn the conditioning signal
+instead of manually writing the conditioning text
+```
+
+P-tuning can be thought of as making soft prompts less shallow. Instead of treating the learned prompt as a simple list of free embedding vectors, P-tuning methods may generate or structure those vectors with a small neural module. The goal is to make the prompt representation more expressive and easier to optimize.
+
+P-tuning v2-style approaches also made prompt learning more competitive across model sizes and tasks by applying trainable prompt-like parameters more deeply, rather than relying only on a few input embeddings.
+
+The practical distinction:
+
+```text
+prompt tuning:
+  learn soft tokens near the input
+
+P-tuning:
+  learn a richer prompt-conditioning mechanism
+```
+
+These methods are good for lightweight task adaptation. They are less suitable when the target behavior requires deep changes to internal reasoning or domain knowledge.
+
+Failure modes:
+
+* the learned prompt overfits to narrow templates,
+* performance collapses when inputs differ from training examples,
+* the soft prompt is hard to interpret or debug,
+* the model treats learned prompt capacity as style conditioning rather than task understanding,
+* prompt length eats into useful context,
+* prompt embeddings are brittle across model/tokenizer changes.
+
+Interview framing:
+
+> Prompt tuning learns continuous prompt embeddings while freezing the model. It is extremely parameter-efficient, but it mostly learns how to condition a capable base model rather than how to rewrite the model. P-tuning makes prompt learning more expressive with richer prompt representations or deeper prompt conditioning. These methods are lightweight, but they usually have less adaptation capacity than LoRA.
+
+#### IA3
+
+IA3 stands for "Infused Adapter by Inhibiting and Amplifying Inner Activations."
+
+The key idea is even more constrained than LoRA. Instead of adding low-rank matrices, IA3 learns small vectors that scale internal activations.
+
+Conceptually:
+
+```text
+activation -> learned scale vector * activation
+```
+
+Those learned vectors can scale parts of the attention or feedforward computation. The model's large weight matrices stay frozen, and the adapter learns which internal channels to amplify or suppress for the target task.
+
+The intuition:
+
+```text
+LoRA changes directions in weight space.
+IA3 changes the strength of existing internal features.
+```
+
+This can be extremely parameter-efficient because scaling vectors are tiny compared with full matrices. The cost is lower capacity: IA3 can steer existing features, but it has less room to create new transformations than LoRA.
+
+IA3 is easiest to understand as feature gating.
+
+The frozen base model already computes many internal features. IA3 does not add a large new transformation. It learns which existing channels should matter more or less for a task:
+
+```text
+existing feature channel
+  -> amplify it
+  -> suppress it
+  -> leave it mostly unchanged
+```
+
+That means IA3 is closer to:
+
+```text
+select and rescale existing behavior
+```
+
+than:
+
+```text
+learn a new behavior from scratch
+```
+
+In transformer terms, IA3 can scale activations associated with attention and feedforward layers. Because the learned objects are vectors rather than matrices, the trainable parameter count is extremely small.
+
+This gives IA3 several practical advantages:
+
+* very small adapter checkpoints,
+* low optimizer memory,
+* fast training,
+* easy storage for many tasks,
+* reduced risk of catastrophic forgetting because the base model is frozen,
+* simple mental model for task-specific feature emphasis.
+
+It also creates a clear limitation. If the base model does not already contain useful features for the task, scaling existing activations may not be enough. LoRA can add a low-rank transformation; IA3 mostly changes the intensity of existing transformations.
+
+IA3 is attractive when you want very small adapters, many task-specific variants, or low training overhead. It is less attractive when the adaptation needs substantial representational change.
+
+Failure modes:
+
+* the task requires new transformations, not just feature reweighting,
+* the base model lacks the relevant latent capability,
+* learned scales overfit to spurious channels,
+* the adapter is too constrained for complex domain adaptation,
+* performance is sensitive to which activations are scaled.
+
+Interview framing:
+
+> IA3 freezes the base model and learns small vectors that scale internal activations. It is extremely parameter-efficient because it trains vectors rather than matrices. The tradeoff is capacity: IA3 can amplify or suppress existing features, but it has less ability than LoRA to add new task-specific transformations.
+
+#### Comparing the Methods
+
+| Method | What is trained | Where it acts | Strength | Main limitation |
+| ------ | --------------- | ------------- | -------- | --------------- |
+| LoRA | low-rank adapter matrices | usually attention/MLP weights | strong general PEFT baseline | rank and target-layer choices matter |
+| Prefix tuning | learned prefix keys/values | attention state | expressive learned context | consumes attention/context capacity |
+| Prompt tuning | soft prompt embeddings | input embedding sequence | extremely lightweight | limited adaptation capacity |
+| P-tuning | learned prompt representations, sometimes with prompt encoders | input or prompt-conditioning path | more expressive prompt adaptation | variant-specific complexity |
+| IA3 | learned activation-scaling vectors | attention/MLP activations | tiny adapters, cheap multitask variants | lower capacity than LoRA |
+
+Interview framing:
+
+> LoRA, prefix tuning, prompt tuning, P-tuning, and IA3 are all PEFT methods, but they constrain learning in different places. LoRA learns low-rank weight updates, prefix tuning learns attention prefixes, prompt tuning learns soft input embeddings, P-tuning learns richer prompt-conditioning representations, and IA3 learns vectors that scale internal activations. The common goal is to adapt a mostly frozen base model cheaply while reducing optimizer memory, checkpoint size, and catastrophic-forgetting risk.
+
+### When PEFT / LoRA Is Useful
+
+Use LoRA or PEFT when:
+
+* full fine-tuning is too expensive,
+* you need fast domain adaptation,
+* you want separate adapters for different customers or tasks,
+* the base model is already strong,
+* the desired change is narrow,
+* you want smaller deployable deltas,
+* you want to reduce catastrophic forgetting risk.
+
+Examples:
+
+* adapt a general model to support-ticket tone,
+* tune a code model for one repository style,
+* adapt a model to medical or legal formatting,
+* improve tool-call formatting,
+* create a customer-specific adapter without copying the whole base model.
+
+### When PEFT / LoRA Is Not Enough
+
+LoRA is not magic.
+
+It may be insufficient when:
+
+* the base model lacks the underlying capability,
+* the domain shift is very large,
+* the task needs deep new reasoning patterns,
+* the adaptation data is low quality,
+* the adapter rank is too small,
+* the target behavior conflicts with base-model behavior,
+* broad safety or alignment behavior must change.
+
+If the base model cannot do the task at all, a small adapter may only teach surface style.
+
+### How It Compares to Other Updates
+
+| Method | What changes | Best for | Main risk |
+| ------ | ------------ | -------- | --------- |
+| Prompting | input context only | fast behavior steering | brittle, context-limited |
+| RAG | external knowledge in context | fresh/private facts | retrieval noise |
+| LoRA / PEFT | small trainable adaptation | cheap targeted behavior shift | adapter/base mismatch, narrow overfit |
+| Full fine-tuning | many or all weights | broad behavioral/domain change | cost, forgetting, safety regression |
+| Preference optimization | likelihood of preferred outputs | alignment and preference shaping | preference data bias |
+| RLHF / RL | policy over trajectories | interactive or long-horizon behavior | reward hacking, instability |
+
+### Evaluation Requirements
+
+A LoRA adapter is still a model update.
+
+Evaluate:
+
+* target task quality,
+* general regression,
+* safety behavior,
+* formatting/schema accuracy,
+* hallucination rate,
+* latency and memory impact,
+* compatibility with quantization or serving stack,
+* adapter/base/tokenizer version correctness.
+
+The common mistake is only evaluating the narrow task the adapter was trained on.
+
+### Deployment Mental Model
+
+The deployable artifact is not just the adapter.
+
+It is:
+
+```text
+base model
+  + tokenizer
+  + config
+  + adapter weights
+  + adapter metadata
+  + eval results
+```
+
+If the adapter is loaded against the wrong base model, wrong tokenizer, or wrong quantization setting, behavior can silently break.
+
+Chapter 9 covers this engineering side: registries, artifact lineage, serving adapters, and versioning.
+
+### Interview Framing
+
+> PEFT methods like LoRA freeze the base model and train a small constrained update. LoRA represents the update to a weight matrix with low-rank adapter matrices, which reduces trainable parameters and optimizer memory. It is useful for targeted domain or behavior adaptation when the base model is already capable. It still needs eval gates because it can overfit, regress safety, or fail if the adapter is paired with the wrong base model.
+
+## 4.6 Distillation, Self-Distillation, and Reference-Guided Updates
+
+Distillation trains one model or policy to match useful behavior from another model, checkpoint, search process, or privileged context.
+
+The important idea is not merely "two networks." The useful abstraction is:
+
+```text
+fast learner updates against a reference signal
+that is more stable, better informed, cheaper to query later,
+or more filtered than the learner's raw self-update
+```
+
+### Knowledge Distillation
+
+Classic knowledge distillation uses a teacher model to train a student model. The teacher is often larger, more accurate, or an ensemble. The student may be smaller, faster, cheaper, or easier to deploy.
+
+The teacher provides **soft targets**, not just hard labels. For example, a hard label may say "cat," but a teacher distribution can say:
+
+```text
+cat: 0.82
+fox: 0.10
+dog: 0.06
+raccoon: 0.02
+```
+
+That distribution carries structure about which mistakes are plausible. The student learns more than the single correct answer; it learns the teacher's geometry over alternatives.
+
+This is especially useful when the true label is too coarse. In language modeling, many next tokens can be acceptable, but not equally acceptable. A hard target treats every non-observed token as equally wrong. A teacher distribution can say that one synonym, phrase, or action is close to the desired behavior while another is far away.
+
+Distillation also changes the economics of deployment. A large model or ensemble can be used offline to produce targets, then a cheaper student can serve traffic. The price is that the student inherits the teacher's blind spots unless the distillation data and evals include cases where the teacher is wrong.
+
+### Policy Distillation
+
+Policy distillation transfers behavior from one policy to another. In RL, this can compress several task policies into one policy or transfer a search-enhanced policy into a faster policy. In LLMs, it means shaping the next-token distribution or tool-action distribution of the student.
+
+Policy distillation is different from ordinary SFT. SFT imitates observed outputs. Policy distillation can match the teacher's conditional distribution over many possible next actions or tokens.
+
+That distinction matters for agents and LLMs because the same final answer can be reached through different local decisions. Policy distillation can teach the student which intermediate actions were plausible, which tool calls were preferred, or which token choices the teacher considered close alternatives. SFT usually only says "make this full target sequence more likely."
+
+The data source also matters. Offline distillation on a fixed teacher dataset is closer to SFT: the student is pulled toward behavior from an external distribution. On-policy distillation is different because the student generates the states first. The teacher then gives guidance on the student's own partial trajectories. This reduces the mismatch between training states and test-time states, and it helps explain why on-policy distillation can sometimes preserve broad behavior better than ordinary imitation.
+
+### Self-Distillation
+
+Self-distillation is not circular, because the teacher and student are not identical in role even if they share architecture or initial weights.
+
+The teacher may be:
+
+* an earlier checkpoint,
+* an EMA or momentum copy of the student,
+* the same model with extra context,
+* the same model under a different view or augmentation,
+* the current model after search, filtering, or verification.
+
+The asymmetry comes from time, information, view, or filtering. The student learns from a version of itself that is delayed, smoothed, privileged, or selectively trusted.
+
+This is the key to why self-distillation is not just a model "teaching itself what it already knows." The teacher is created by changing the information available to the model or by smoothing the model over time. A model with a hint, a model averaged over many recent checkpoints, and a model after search are not the same learning signal as the raw student at the current step.
+
+Representation self-distillation and policy self-distillation should be kept separate:
+
+| Type | What Is Matched | Purpose |
+| ---- | --------------- | ------- |
+| Representation self-distillation | embeddings or hidden representations | better latent geometry, invariance, semantic clustering |
+| Policy self-distillation | token/action distributions | better output behavior, local policy refinement, behavior transfer |
+
+### Target Networks and Old Policies
+
+RL target networks are one of the cleanest examples of the slow-reference pattern.
+
+In DQN, Double DQN, DDPG, TD3, and SAC-style methods, the online network changes quickly while a target network changes slowly. The target network provides bootstrapped value targets. If the target were updated at the same speed as the learner, the learner would chase a moving target partly created by itself.
+
+The bootstrapping problem is subtle. The target often contains the model's own estimate of future value. That means the model is learning from a target that is partly predicted, not purely observed. If the prediction target changes every time the learner changes, errors can reinforce themselves. A target network slows down that feedback path.
+
+PPO, TRPO, RLHF, and DPO use a related but not identical idea. An old policy or frozen reference policy anchors the update. The reference is not always a teacher of better content; often it is a behavioral constraint that says:
+
+```text
+improve, but do not move too far in one update
+```
+
+This is why plain actor-critic is not always the best example of a slow-teacher/fast-student pattern. In many actor-critic systems, the critic is updated as fast as, or faster than, the actor. The stronger RL examples are target networks, old-policy snapshots, EMA critics, and KL-to-reference constraints.
+
+So there are two questions to separate:
+
+```text
+Who evaluates the learner?
+Who defines the stable target or constraint?
+```
+
+A critic may evaluate the learner without being slow. A target network may be slow without being a separate kind of evaluator. A reference policy may not evaluate quality at all; it may only define the region where the update is allowed to move.
+
+### OPSD and RMSD
+
+On-policy self-distillation, or OPSD, uses the student's own rollouts as the training context. A teacher policy, often the same model with extra context or hints, rescoring those rollouts provides dense token-level feedback.
+
+The phrase **on-policy** matters. The student is not being trained only on ideal demonstrations from some external corpus. It generates its own response, including its own mistakes and awkward prefixes. The teacher then scores what the student actually did. This is closer to a tutor marking up a student's attempted solution than handing the student a polished answer key.
+
+From the distributional view, OPSD is not trying to replace the student with the teacher everywhere. It is trying to reshape the student's current distribution where the student's own behavior creates useful training states. That makes the update more local than SFT on a fixed demonstration set.
+
+A simplified setup:
+
+```text
+student prompt x
+  -> student rollout y
+
+teacher prompt x' = x + privileged hint/correction
+  -> teacher probabilities over the same rollout prefixes
+
+loss:
+  reverse KL from student distribution to teacher distribution
+```
+
+Reverse KL is conservative because the student's own probabilities determine which tokens dominate the loss. It tends to refine behavior near what the student already considers plausible instead of forcing broad imitation of every teacher-supported mode.
+
+Intuitively, forward KL asks the student to cover the teacher's distribution. Reverse KL asks the student to clean up its own distribution relative to the teacher. That makes reverse KL attractive when the goal is behavior insertion without rewriting every unrelated part of the policy.
+
+The tradeoff is credit assignment. OPSD gives dense token-level signal, but not every teacher-student disagreement is task-relevant. The teacher may disagree on style, filler words, punctuation, or reasoning phrasing even when the target behavior depends on a small number of important tokens. Dense signal is useful only if the signal mostly points at the behavior you wanted to teach.
+
+Relevance-Masked Self-Distillation, or RMSD, adds a second filter:
+
+1. Generate the student rollout.
+2. Re-score the rollout with a privileged teacher prompt.
+3. Find token positions with large teacher-student logprob disagreement.
+4. Ask a judge model which disagreements are relevant to the target behavior.
+5. Apply reverse KL only on the selected token positions.
 
 The key distinction:
 
 ```text
-weight fetches can be amortized across a batch
-KV cache fetches cannot be amortized in the same way because each sequence has its own context
-compute cannot be eliminated because each token needs its own matrix multiplies
+reverse KL = local in probability space
+RMSD = local and relevant in task space
 ```
+
+This matters because teacher-student disagreement can be noise. The teacher may prefer "Absolutely" over "That" even when the desired behavior is about spelling `pineapple` as `pinapple`. RMSD tries to spend gradient budget on the tokens that actually carry task signal.
+
+RMSD is therefore doing credit assignment at token granularity. The first filter, large logprob disagreement, is high recall: it catches many places where the teacher and student differ. The judge filter tries to improve precision: among those disagreements, it keeps the positions that are semantically relevant to the desired behavior. The method is useful only if the relevance filter is better than blindly trusting every disagreement.
+
+### Method Map
+
+| Method | Slow / Frozen / Privileged Object | Fast Object | Main Role |
+| ------ | --------------------------------- | ----------- | --------- |
+| DQN / Double DQN | target Q network | online Q network | stable bootstrapped targets |
+| DDPG / TD3 / SAC | target critic or target actor | online actor/critic | reduce target drift |
+| PPO / TRPO | old policy snapshot | updated policy | trust-region-like constraint |
+| RLHF / DPO | reference policy | updated policy | behavioral anchor / KL constraint |
+| Knowledge distillation | larger or ensemble teacher | smaller student | transfer / compression |
+| BYOL / DINO / Mean Teacher | EMA or momentum teacher | online student encoder | stable representation target |
+| OPSD | privileged-context teacher | student policy | local policy refinement |
+| RMSD | privileged teacher plus relevance mask | student policy | filtered token-level behavior insertion |
+
+The two big subfamilies are:
+
+* **stabilized self-bootstrapping**, where the teacher is basically the learner delayed or smoothed,
+* **asymmetric supervision**, where the teacher has knowledge, compute, context, or filtering the student does not have.
+
+## 4.7 Training, RL, and Inference Compute Economics
+
+A model is not optimized only for pretraining loss.
+
+A deployed model is part of an economic loop:
+
+```text
+pretraining compute
+  -> post-training / RL compute
+  -> inference compute
+  -> user value
+```
+
+A useful mental model is total compute:
+
+$$
+C_{\text{total}} =
+C_{\text{pretrain}} + C_{\text{RL}} + C_{\text{inference}}
+$$
+
+For dense matrix multiplies, a rough pretraining estimate is:
+
+$$
+C_{\text{pretrain}} \approx 6 \cdot N_{\text{active}} \cdot D_{\text{pretrain}}
+$$
+
+The factor of 6 is a standard back-of-the-envelope:
+
+* about 2 FLOPs per parameter-token for the forward pass,
+* about 4 more for the backward pass,
+* total forward plus backward $\approx 6$.
+
+Inference is forward-only:
+
+$$
+C_{\text{inference}} \approx
+2 \cdot N_{\text{active}} \cdot D_{\text{inference}} \cdot \text{inefficiency}
+$$
+
+The inefficiency term matters because decode can have much lower hardware utilization than prefill or training. A token generated one at a time may be memory-bandwidth-bound even when the hardware has enormous peak FLOPs.
+
+RL and post-training sit between the two:
+
+$$
+C_{\text{RL}} \approx
+(2 \text{ to } 6)
+\cdot N_{\text{active}}
+\cdot D_{\text{RL}}
+\cdot \text{inefficiency}
+$$
+
+The range exists because RL workloads may require:
+
+* forward-only rollout generation,
+* reward model scoring,
+* policy updates on some subset of rollouts,
+* expensive decode with lower utilization,
+* environment or tool execution around the model.
+
+### Why Models May Be Trained Beyond Chinchilla
+
+The original Chinchilla-style intuition asks:
+
+```text
+Given a fixed pretraining compute budget,
+what model size and token count minimize loss?
+```
+
+But a deployed frontier model asks a broader question:
+
+```text
+Given pretraining + RL + inference cost,
+what model gives the best user value per total dollar?
+```
+
+That can favor training a smaller or sparser model on many more tokens than a pure pretraining-optimal rule would suggest. More training can make the model cheaper or better at inference time, and inference may dominate the lifetime cost if the model serves enough users.
+
+A simple heuristic is cost equalization:
+
+```text
+if one stage is much more expensive than the others,
+move effort to the stage that reduces it
+```
+
+For many power-law-like tradeoffs, the rough optimum is often near the point where major costs are of the same order.
+
+This does not mean the costs are exactly equal in practice. Labs have private scaling curves, deployment forecasts, hardware constraints, model-family plans, and risk estimates. The useful interview point is that pretraining token count is no longer only about the pretraining run. It is also about expected post-training and inference usage.
+
+### RL Compute Has a Hidden Decode Cost
+
+RL for LLMs is not just a normal training loop.
+
+It often includes:
+
+```text
+sample prompts
+  -> generate rollouts
+  -> score with reward/verifier/environment
+  -> update policy
+  -> evaluate
+```
+
+The rollout generation can be expensive because it uses autoregressive decode. Decode may have lower model FLOPs utilization than training because each token is sequential and memory-bound.
+
+That means a million RL tokens can cost more wall-clock time or hardware rental than a million pretraining tokens, depending on batching, context length, reward-model calls, and environment cost.
 
 Interview framing:
 
-> I would model an LLM forward pass with a roofline-style max of compute time and memory time. Batching amortizes weight reads, but KV-cache reads still grow with batch and context, which is why cost curves flatten instead of improving forever.
+> I would not compare pretraining, RL, and inference only by token counts. Pretraining uses efficient forward/backward passes over large batches. RL may include inefficient decode, reward scoring, and partial training on rollouts. Inference is forward-only but often memory-bandwidth-bound during decode.
 
-### Batch Size, Latency, and Cost Curves
+### Product Traffic Feeds Back Into Training Strategy
 
-As batch size increases:
+If a model will serve enormous traffic, inference cost matters enough to change training strategy.
 
-* compute time grows roughly linearly,
-* KV-cache memory time grows roughly linearly,
-* weight-fetch memory time is mostly fixed for the forward pass.
-
-Latency has a lower bound because the active serving hardware still has to read the model weights. You cannot push latency to zero by making batch size tiny.
-
-Cost per token behaves differently because cost is roughly time divided by tokens served:
+For example:
 
 ```text
-cost per token = serving time / batch size
+model used by few users
+  -> pretraining cost may dominate
+
+model used by millions of users
+  -> inference cost can dominate lifetime economics
 ```
 
-When batch size is small, the cost per token is high because each token pays for reading the weights. As batch size grows, the weight read is shared across more tokens. Eventually cost stops improving because compute and KV-cache work are per-token.
+This explains why production teams care about:
 
-This explains "fast mode" and "slow mode" product behavior:
+* smaller active parameter counts,
+* MoE sparsity,
+* distillation,
+* quantization,
+* long-context efficiency,
+* output length control,
+* routing easy requests to cheaper models,
+* training more if it reduces inference cost or improves task success.
 
-* fast mode may use smaller batches or higher-priority scheduling, improving latency at higher cost,
-* slow mode can wait for larger batches, reducing cost up to a point,
-* after the weight reads are already amortized, waiting longer does not make decode free.
+The model is not just a checkpoint. It is a capital asset that must be amortized through deployment.
 
-### Optimal Batch Size Heuristic
+## 4.8 Online Learning
 
-A useful heuristic comes from setting compute time equal to weight-fetch memory time and ignoring KV cache:
+Online learning updates behavior as new data arrives.
 
-$$
-\frac{B \cdot N_{\text{active}}}{\text{FLOPs}}
-=
-\frac{N_{\text{total}}}{\text{mem\_bw}}
-$$
+In strict online learning, the model or policy updates continuously or frequently from production interactions. In many production ML systems, "online learning" is softened into frequent retraining, bandit updates, canary evaluation, or reranking updates rather than immediate LLM weight updates.
 
-Solving for batch size:
+Online learning is common in:
 
-$$
-B =
-\frac{\text{FLOPs}}{\text{mem\_bw}}
-\cdot
-\frac{N_{\text{total}}}{N_{\text{active}}}
-$$
+* recommendation ranking
+* ads bidding
+* search ranking
+* personalization
+* fraud and abuse detection
+* contextual bandits
 
-Modern accelerators often have a rough ratio on the order of hundreds of low-precision operations per byte of memory bandwidth. If the ratio is approximately 300, then:
+For LLMs, full online weight updates are less common because safety, regression risk, and infrastructure cost are high. More common patterns include:
 
-```text
-optimal batch size is on the order of
-300 * (total parameters / active parameters)
-```
+* updating retrieval indexes
+* updating prompts or policies
+* updating rerankers
+* collecting preference data for batch post-training
+* using bandits to choose among model variants
 
-For a sparse MoE model, total parameters may be much larger than active parameters. That means a very sparse model can require larger batches to fully amortize weight movement.
+## 4.9 Continual Learning
 
-This is not an exact serving formula. Real systems have attention kernels, routing, network communication, tokenizer overhead, scheduler behavior, and nonideal utilization. But it gives the right shape:
+Continual learning means updating a model over time while preserving previous capabilities.
 
-```text
-more sparsity -> lower active compute
-more sparsity -> more total weights
-therefore -> larger batch needed to amortize weight reads
-```
+The challenge is catastrophic forgetting. A model fine-tuned on new data may improve on recent tasks while losing older skills, safety behavior, language ability, or domain coverage.
 
-### HBM Drain Time and the Train Schedule
+Common mitigation patterns:
 
-Another useful serving mental model is the "train schedule."
+* mix old and new data during training
+* keep a replay buffer
+* evaluate broad regression suites
+* use small adapter updates where appropriate
+* freeze parts of the model
+* gate updates by capability and safety evals
+* track per-domain performance, not only aggregate metrics
 
-An inference engine repeatedly launches batches through the model. A practical cadence is shaped by how long it takes to read a large fraction of high-bandwidth memory:
+Continual learning is not just "train again." It is controlled change management for model behavior.
 
-$$
-\text{drain time} \approx \frac{\text{HBM capacity}}{\text{HBM bandwidth}}
-$$
+## 4.10 Self-Improvement Loops
 
-For modern accelerator systems, this can land around tens of milliseconds.
-
-Mental model:
-
-```text
-every ~t milliseconds:
-  a batch "train" departs
-  ready sequences board
-  the model produces one decode token per sequence
-```
-
-If the train leaves too frequently, it cannot read the required memory fast enough. If it leaves too slowly, expensive compute sits idle.
-
-This gives a lower bound on inter-token latency for a given serving configuration. It also explains why extremely low latency is hard: even perfect scheduling cannot bypass memory bandwidth.
-
-### Reading API Prices as Cost Clues
-
-Public API pricing often leaks serving economics.
-
-Useful clues:
-
-* **Output tokens cost more than input tokens:** decode is less efficient than prefill because it generates one token at a time and often waits on memory.
-* **Long-context price jumps:** the provider may cross from compute-bound to KV-cache-memory-bound at long context lengths.
-* **Cached input tokens are cheaper:** reading or reusing stored prefix state can be cheaper than recomputing the full prefix.
-* **Different cache durations have different prices:** the provider may be using different memory or storage tiers.
-
-You should not overfit to exact public prices, but you can infer the qualitative bottleneck:
-
-```text
-cheap prefill + expensive decode
-  -> decode is memory-bandwidth constrained
-
-price jump above long-context threshold
-  -> KV-cache memory bandwidth/capacity is now material
-
-cheap cached tokens
-  -> rematerializing KV is more expensive than retrieving stored KV
-```
-
-### KV Cache Memory Tiers
-
-There are two ways to recover prefix state:
-
-1. **Rematerialize:** recompute KV cache from token IDs.
-2. **Retrieve:** store KV cache somewhere and load it later.
-
-Memory tiers create different tradeoffs:
-
-| Tier | Mental model | Good for | Risk |
-| ---- | ------------ | -------- | ---- |
-| HBM | fastest device memory | very hot active prefixes | expensive capacity |
-| Host DDR | slower but larger memory | warm reusable prefixes | transfer latency |
-| Flash/object storage | cheap durable storage | longer-lived cache entries | slow retrieval |
-| Rematerialization | recompute from tokens | cold or uncertain reuse | burns GPU compute |
-
-A useful decision rule:
-
-```text
-store if expected reuse value > hold cost + retrieval cost
-rematerialize if reuse is unlikely or storage would crowd out active work
-```
-
-For short-lived active conversations, HBM or host memory may make sense. For long-lived cache entries, slower tiers may be cheaper, but retrieval latency matters. For rarely reused prefixes, recomputation may be cheaper than paying to hold cached state.
-
-This is the same memory/compute tradeoff seen elsewhere:
-
-```text
-KV cache:
-  spend memory to save compute
-
-activation rematerialization:
-  spend compute to save memory
-```
-
-## 4.2 Request Router
-
-The router decides where a request goes.
-
-Routing can be based on:
-
-* model version
-* tenant
-* priority
-* region
-* request size
-* expected latency
-* cost tier
-* experiment assignment
-* fallback policy
-
-Model routing is especially important when a product uses multiple models. A simple request may go to a small fast model. A complex request may go to a larger model. A premium tenant may get a dedicated endpoint. A degraded cluster may route traffic away from an overloaded model pool.
-
-Routing should be observable. If a bad rollout sends 20% of traffic to a broken model, operators need to see that immediately.
-
-## 4.3 Batcher
-
-The batcher groups requests so hardware can process them more efficiently.
-
-Batching improves throughput because GPUs are built for parallel computation. But batching can hurt latency because requests wait for other requests to arrive.
-
-The core tradeoff is:
-
-```text
-larger batches -> better GPU utilization, worse queueing latency
-smaller batches -> lower queueing latency, worse utilization
-```
-
-LLM serving complicates this because requests have different prompt lengths and output lengths. Static batching wastes work when one request is much longer than the others. Continuous batching solves this by adding and removing requests as generation progresses.
-
-## 4.4 Cache
-
-The cache avoids repeated work.
-
-Common caches include:
-
-* response cache for exact repeated prompts
-* embedding cache for repeated documents
-* retrieval cache for repeated queries
-* prompt-prefix cache for shared system prompts or conversation prefixes
-* KV cache inside the inference engine
-
-Caching is powerful but dangerous. A cache key that ignores user identity can leak data. A cache key that ignores model version can serve stale behavior. A cache that stores low-quality generated answers can make failures persistent.
-
-In interviews, explain what is cached, why it is safe to cache, how it is invalidated, and what happens on cache miss.
-
-## 4.5 Queue
-
-The queue buffers work between producers and workers.
-
-Queues are useful when:
-
-* traffic is bursty
-* work can run asynchronously
-* workers need controlled concurrency
-* retries need backoff
-* priority classes matter
-
-Queues can also hide overload. If requests keep entering faster than workers can process them, the backlog grows. Users see increasing latency long before the service fully fails.
-
-A production queue needs:
-
-* backlog metrics
-* age-of-oldest-job metrics
-* dead-letter handling
-* retry limits
-* priority or fairness controls
-* cancellation when the result is no longer needed
-
-## 4.6 Worker
-
-The worker executes jobs.
-
-Workers may run CPU preprocessing, retrieval, inference calls, postprocessing, or background evaluation. In GPU serving, workers often map to model replicas or inference engine processes.
-
-Important worker controls include:
-
-* concurrency limits
-* memory limits
-* heartbeat checks
-* graceful shutdown
-* idempotency
-* retry semantics
-
-Workers should be designed so a single bad request cannot poison the whole pool. Large requests, malformed inputs, and pathological outputs need limits.
-
-## 4.7 Metrics, Logging, and Tracing
-
-Observability turns production behavior into evidence.
-
-Metrics answer:
-
-* how many requests are happening?
-* how slow are they?
-* how many fail?
-* how full are queues?
-* how utilized are GPUs?
-* how much does each request class cost?
-
-Logs answer:
-
-* what happened for this request?
-* which model version served it?
-* which fallback path was used?
-* what validation errors occurred?
-
-Traces answer:
-
-* where did time go?
-* which dependency caused the delay?
-* which step failed first?
-
-For ML systems, observability should include model-specific dimensions:
-
-* prompt token count
-* output token count
-* model version
-* decoding parameters
-* cache hit or miss
-* route decision
-* fallback reason
-* safety or validation outcome
-
-Without these dimensions, a dashboard may show "latency increased" but not whether the cause was longer prompts, queueing, decode speed, retrieval, retries, or a bad model rollout.
-
----
-
-# 5. Common Technologies
-
-Technology choices are less important than knowing what problem each technology solves.
-
-## 5.1 vLLM
-
-vLLM is an inference serving stack optimized for high-throughput LLM serving.
-
-It is known for:
-
-* continuous batching
-* paged attention / paged KV-cache management
-* OpenAI-compatible serving APIs
-* efficient memory use for concurrent generation
-
-The reason vLLM matters is not the brand name. It matters because naive LLM serving wastes GPU memory and struggles with variable-length generation. vLLM addresses that scheduling and memory-management problem.
-
-## 5.2 TensorRT-LLM
-
-TensorRT-LLM is NVIDIA's stack for optimized LLM inference on NVIDIA GPUs.
-
-It is relevant when teams need:
-
-* highly optimized kernels
-* quantization support
-* multi-GPU execution
-* tight hardware-specific performance tuning
-
-The tradeoff is operational complexity. A team may get better performance, but pay with a more specialized build, deployment, and debugging path.
-
-## 5.3 Text Generation Inference
-
-Hugging Face Text Generation Inference, often called TGI, is another production-oriented LLM serving stack.
-
-It provides:
-
-* model serving APIs
-* batching support
-* streaming
-* metrics
-* integration with Hugging Face models
-
-TGI is often attractive when a team wants a practical serving path around Hugging Face model artifacts.
-
-## 5.4 Ray Serve
-
-Ray Serve is useful for scalable Python model serving and orchestration.
-
-It can host deployments, route requests, scale replicas, and compose model pipelines. It is especially useful when inference is not just one model call but a graph of Python steps.
-
-The tradeoff is that Ray adds its own operational model. It can simplify distributed serving, but teams still need to understand resource allocation, backpressure, and failure handling.
-
-## 5.5 Kubernetes
-
-Kubernetes is commonly used to run model-serving infrastructure.
-
-It provides:
-
-* deployment objects
-* service discovery
-* autoscaling hooks
-* resource requests and limits
-* rolling updates
-* health checks
-* node pools
-
-Kubernetes does not automatically solve ML serving. GPU workloads require careful node selection, device plugins, memory planning, startup timing, and rollout controls.
-
-## 5.6 Redis
-
-Redis commonly appears as:
-
-* a low-latency cache
-* a rate-limit store
-* a session store
-* a lightweight queue
-* a feature flag or routing metadata store
-
-Redis is useful when millisecond access matters. It is risky when used as the only durable source of truth for important state.
-
-## 5.7 Kafka and Queues
-
-Kafka, SQS, Pub/Sub, RabbitMQ, Celery queues, and similar systems buffer and distribute work.
-
-Use queues when work is asynchronous, bursty, retryable, or fan-out heavy. Avoid queues when the user requires tight synchronous latency and cannot tolerate backlog delay.
-
-Kafka is especially useful for durable event streams, audit trails, analytics pipelines, and high-throughput decoupling between services.
-
-## 5.8 Postgres
-
-Postgres is often the durable control-plane database.
-
-It may store:
-
-* model versions
-* deployment metadata
-* evaluation results
-* job records
-* user feedback
-* audit logs
-* feature flags for small systems
-
-Postgres is not usually in the hot inference path for every token, but it is often the system of record for product and operational state.
-
-## 5.9 GPU Scheduling
-
-GPU scheduling decides which work gets access to scarce accelerator resources.
-
-Important concepts include:
-
-* node pools
-* GPU memory capacity
-* model placement
-* replica sizing
-* multi-instance GPU partitioning where available
-* priority classes
-* preemption
-* warm pools
-
-GPU scheduling is harder than CPU scheduling because model weights are large, startup time is high, memory is finite, and workloads have variable sequence lengths.
-
-## 5.10 Autoscaling
-
-Autoscaling changes capacity based on load.
-
-Common signals include:
-
-* request rate
-* queue depth
-* queue age
-* GPU utilization
-* tokens per second
-* latency percentiles
-
-Autoscaling GPU inference is tricky because adding capacity is slow. A new replica may need to pull weights, allocate GPU memory, warm kernels, and join the router. For bursty traffic, teams often need warm capacity, queue-based scaling, and admission control.
-
----
-
-# 6. Inference Implementation Details
-
-## 6.1 Batching
-
-Batching combines multiple requests into one model execution step.
-
-For encoder-style models or small classifiers, batching is straightforward: group inputs, run the model, split outputs.
-
-For decoder-only LLMs, batching has two phases:
-
-* **prefill**, where the model processes the input prompt
-* **decode**, where the model generates one or more output tokens at a time
-
-The challenge is that requests finish at different times. If static batching waits for every request to complete, short requests are stuck behind long requests.
-
-## 6.2 Continuous Batching
-
-Continuous batching keeps the GPU busy by updating the active batch as requests arrive and finish.
-
-Instead of:
-
-```text
-batch A starts
-batch A fully finishes
-batch B starts
-```
-
-the system does:
-
-```text
-active batch runs decode step
-finished sequences leave
-new sequences enter
-active batch runs next decode step
-```
-
-This improves utilization and reduces wasted time, especially when output lengths vary.
-
-The tradeoff is scheduler complexity. The serving engine must manage active sequences, KV-cache blocks, fairness, cancellation, and memory pressure.
-
-## 6.3 KV-Cache Management
-
-The KV cache stores attention keys and values for previous tokens so the model does not recompute them at every decode step.
-
-Without KV caching, each generated token would require repeatedly processing the whole sequence. With KV caching, decode can reuse prior attention state.
-
-The problem is memory.
-
-KV-cache memory grows with:
-
-* number of active requests
-* sequence length
-* number of layers
-* hidden size
-* attention head configuration
-* precision
-
-When concurrency rises, KV cache can become the limiting resource before raw compute does. Poor KV-cache management causes OOMs, evictions, cache fragmentation, or admission failures.
-
-Paged KV-cache approaches treat cache memory more like virtual memory: allocate blocks as needed, reuse freed blocks, and reduce fragmentation.
-
-For the model-architecture side of this tradeoff, see Chapter 0's discussion of MHA, MQA, GQA, and MLA. Those choices determine how much K/V state exists before the serving system has to manage it.
-
-## 6.4 Streaming
-
-Streaming sends partial output as it is generated.
-
-Streaming helps because it improves perceived latency. It does not necessarily reduce total model work.
-
-A streaming service must handle:
-
-* client disconnects
-* cancellation propagation
-* partial output logging
-* timeout policy
-* backpressure when clients read slowly
-* errors after some tokens have already been sent
-
-The last point matters. Once a system has streamed partial output, it cannot pretend the request never happened. Error handling must be designed around partial completion.
-
-## 6.5 Async Handling
-
-Inference services often need asynchronous request handling because model calls are slow relative to normal HTTP operations.
-
-Async handling allows the server to:
-
-* accept many connections
-* wait on queues or model workers without blocking threads
-* stream tokens
-* cancel work when clients disconnect
-* enforce timeouts
-
-Async is not magic throughput. The GPU still has finite capacity. Async improves orchestration efficiency, not model capacity.
-
-## 6.6 Retries and Timeouts
-
-Timeouts bound waiting. Retries recover from transient failures.
-
-Together, they can also cause overload.
-
-If a service times out after ten seconds and every client retries immediately, the system may double its load exactly when it is least able to handle it. Retrying long inference requests is especially expensive because repeated work consumes tokens and GPU time.
-
-Good retry design includes:
-
-* retry only idempotent operations
-* use exponential backoff with jitter
-* cap retry attempts
-* avoid retrying requests that are still running
-* propagate request IDs
-* distinguish queue timeout, model timeout, and downstream timeout
-
-For LLMs, cancellation matters. If the client gives up, the server should stop generation when possible.
-
-## 6.7 Model Routing
-
-Model routing maps requests to models.
-
-Common routing patterns:
-
-* small model for easy requests, large model for hard requests
-* specialized model for a domain
-* region-local model for latency
-* cheaper model for free tier
-* fallback model during outage
-* canary model for experiments
-
-Routing can optimize quality, cost, latency, or availability. It rarely optimizes all four at once.
-
-A strong answer explains the routing objective and the failure policy. If the router misclassifies request difficulty, quality may fall. If the router routes too much traffic to the large model, cost explodes. If fallback routing hides failures, teams may not notice quality degradation.
-
-## 6.8 Quantization
-
-Quantization reduces numerical precision to reduce memory use and improve throughput.
-
-Examples include int8, int4, FP8, and mixed-precision approaches.
-
-Quantization can help by:
-
-* fitting larger models on available GPUs
-* increasing batch size
-* reducing memory bandwidth pressure
-* lowering cost per token
-
-The cost is possible quality loss, hardware-specific behavior, and extra validation burden. A model that looks fine on generic benchmarks may degrade on the product's important edge cases.
-
-## 6.9 Speculative Decoding
-
-Speculative decoding uses a smaller or faster draft model to propose tokens, then a larger target model verifies them.
-
-The goal is to reduce wall-clock decode time while preserving the target model's output distribution when implemented correctly.
-
-It works best when:
-
-* the draft model is much faster
-* the draft model predicts tokens the target model often accepts
-* decode time is the bottleneck
-
-It helps less when prompts are short and prefill dominates, when the draft model has low acceptance, or when orchestration overhead cancels the gain.
-
-## 6.10 Fallbacks and Circuit Breakers
-
-Fallbacks define what happens when the preferred path fails.
-
-Circuit breakers stop sending traffic to a failing dependency or model pool.
-
-Fallback options include:
-
-* retry a different replica
-* route to a smaller model
-* return a cached response
-* provide a partial answer
-* degrade a feature
-* return a clear error
-
-Fallbacks should be explicit product decisions. A fallback that silently returns lower-quality output may preserve uptime but damage trust.
-
-## 6.11 Version Compatibility
-
-Model deployments need version control just like software deployments.
-
-Track:
-
-* model artifact version
-* tokenizer version
-* prompt version
-* serving image version
-* decoding parameters
-* schema version
-* evaluation suite version
-* rollout percentage
-
-A surprising number of production bugs come from mismatched versions. A new model with an old tokenizer, a new prompt with an old parser, or a new schema with an old client can break the system even if each component works alone.
-
----
-
-# 7. Deployment and Versioning
-
-Deployment is the process of changing production behavior safely.
-
-A good deployment path answers:
-
-* what changed?
-* who receives it?
-* how do we measure it?
-* how do we roll it back?
-* what happens to in-flight requests?
-
-Common rollout patterns include:
-
-* **blue-green deployment**, where traffic switches between two environments
-* **rolling deployment**, where replicas update gradually
-* **canary deployment**, where a small percentage receives the new version first
-* **shadow deployment**, where the new model receives copied traffic but does not affect users
-* **A/B testing**, where versions are compared under controlled assignment
-
-For ML systems, deployment also includes quality validation. A new model may be faster and still worse. A new quantization setting may lower cost and subtly break important tasks. A new prompt may improve average quality while increasing refusal rate.
-
-The rollout metric set should include:
-
-* error rate
-* latency percentiles
-* queue depth
-* token usage
-* cost per request
-* cache hit rate
-* validation failure rate
-* user-visible quality metrics
-* fallback rate
-
-Rollback should be boring. If rollback requires rebuilding images, manually editing routes, or guessing which model artifact was deployed, the system is not production-ready.
-
----
-
-# 8. Performance Analysis
-
-Performance analysis starts by asking where time and money go.
-
-## 8.1 Where Time Is Spent
-
-For an LLM request, wall-clock latency often looks like:
-
-```text
-total latency =
-  gateway overhead
-  + prompt construction
-  + retrieval or tool calls
-  + queueing delay
-  + prefill time
-  + decode time
-  + postprocessing
-  + network streaming overhead
-```
-
-If time to first token is bad, investigate:
-
-* routing overhead
-* cache lookup
-* prompt construction
-* retrieval latency
-* queueing delay
-* prefill length
-* cold model replicas
-
-If time to final token is bad, investigate:
-
-* output length
-* decode tokens per second
-* batching behavior
-* GPU memory pressure
-* slow client streaming
-* postprocessing and validation
-
-## 8.2 What Costs Tokens
-
-Token cost is not just the user's visible prompt.
-
-It includes:
-
-* system prompts
-* developer instructions
-* conversation history
-* retrieved documents
-* tool outputs
-* few-shot examples
-* hidden reasoning or intermediate steps when used
-* retries
-* fallback attempts
-* generated output
-
-Cost control often starts with context control. Shorter prompts, better retrieval, summarization, prompt-prefix caching, and smaller model routing can reduce cost without changing the product surface.
-
-## 8.3 Wall-Clock Latency vs Compute Work
-
-Wall-clock latency and compute work are related but not identical.
-
-Batching can increase per-request waiting time while improving total tokens per second. Streaming can improve perceived responsiveness without reducing total compute. Caching can reduce both latency and compute if hit rates are high. Retries increase compute and often worsen latency.
-
-This is why production systems must optimize against the correct objective. A background summarization job can maximize throughput. An interactive chat product may sacrifice throughput for low time to first token.
-
-## 8.4 GPU Utilization Bottlenecks
-
-Low GPU utilization can come from:
-
-* small batches
-* CPU preprocessing bottlenecks
-* tokenizer bottlenecks
-* slow networking
-* poor request scheduling
-* memory-bound decode
-* frequent model loading
-* waiting on retrieval or tools
-
-High GPU utilization can also be bad if latency SLOs are missed. A saturated GPU may look efficient while users experience long queues.
-
-Useful serving metrics include:
-
-* GPU utilization
-* GPU memory utilization
-* tokens per second
-* prefill tokens per second
-* decode tokens per second
-* active sequences
-* pending queue length
-* KV-cache usage
-* batch size distribution
-* time to first token
-* time to final token
-
----
-
-# 9. Reliability Patterns
-
-## 9.1 Admission Control
-
-Admission control rejects or delays work before the system collapses.
-
-It can enforce:
-
-* maximum prompt length
-* maximum output length
-* tenant quotas
-* concurrency limits
-* queue length limits
-* priority classes
-
-Rejecting a request early is often better than accepting it into a queue that will time out anyway.
-
-## 9.2 Backpressure
-
-Backpressure tells upstream callers to slow down.
-
-Without backpressure, overload propagates until everything fails. With backpressure, the system can preserve capacity for high-priority or already-admitted work.
-
-Backpressure can be implemented through rate limits, queue limits, HTTP 429 responses, retry-after headers, or internal flow-control signals.
-
-## 9.3 Idempotency
-
-Idempotency means repeated execution of the same logical operation does not create duplicate side effects.
-
-This matters when clients retry. A request to generate a draft may be safe to retry. A request that charges a customer, sends an email, or writes a final answer to a database needs an idempotency key.
-
-## 9.4 Health Checks
-
-Health checks should test real readiness.
-
-For model serving, "process is alive" is not enough. A useful readiness check may need to verify:
-
-* model weights are loaded
-* GPU memory is allocated
-* tokenizer is available
-* inference engine can run a small request
-* the replica is registered with the router
-
-Readiness and liveness should be different. A slow warmup should not be killed repeatedly because the liveness probe is too aggressive.
-
-## 9.5 Observability as a Feature
-
-Observability is not optional instrumentation added after launch.
-
-For production ML systems, observability is part of the feature because operators must understand quality, cost, and reliability at the same time.
-
-A good trace for an LLM request includes:
-
-* request ID
-* tenant or traffic class
-* model route
-* model version
-* prompt version
-* input and output token counts
-* cache events
-* queue wait time
-* prefill and decode timing
-* fallback events
-* validation result
-
-Sensitive data must be handled carefully. Logging prompts can be useful for debugging, but it may create privacy, compliance, and retention risk.
-
----
-
-# 10. Tradeoffs
-
-Production ML systems are built out of competing constraints. A strong design makes the constraint explicit instead of pretending one architecture optimizes everything.
-
-## 10.1 Latency vs Throughput
-
-Batching improves hardware utilization, but waiting to form a batch increases queue time. Streaming improves perceived latency, but the backend still pays the full decode cost. Low-latency products often need smaller batches, stricter admission control, and fewer retries than offline workloads.
-
-## 10.2 Quality vs Cost
-
-Large models, rerankers, tool calls, and verification steps can improve quality, but they increase cost per request. The common pattern is route-based quality: cheap paths for easy requests, expensive paths for hard or high-value requests, and explicit escalation when confidence is low.
-
-## 10.3 Simplicity vs Resilience
-
-A single-model service is easier to operate. A service with fallback models, circuit breakers, shadow traffic, regional failover, and versioned prompts is harder to build but safer under production failures. The right complexity depends on user risk, traffic volume, and recovery expectations.
-
-## 10.4 Cache Efficiency vs Correctness
-
-Caching can reduce latency and cost dramatically, but wrong cache keys can leak data, serve stale policy, or ignore prompt/model version changes. Cache decisions should include tenant, permission, prompt version, model version, and freshness requirements when those affect correctness.
-
-## 10.5 Model Routing vs Debuggability
-
-Routing lets the system match request difficulty to model cost and capability. It also makes incidents harder to understand because the same user-facing feature may be served by many models, prompts, or inference pools. Every route needs segmented metrics, evals, and fallback behavior.
-
-## 10.6 Utilization vs Tail Reliability
-
-Driving GPUs near full utilization lowers cost per token, but leaves less slack for bursts, long-context requests, and retries. Interactive products usually reserve capacity or shed load earlier than offline systems because p95 and p99 latency matter more than average utilization.
-
----
-
-# 11. Failure Modes in Production
-
-## 11.1 Latency Spikes
-
-Latency spikes can come from traffic bursts, long prompts, slow dependencies, cold replicas, GPU saturation, or queue buildup.
-
-The fix depends on the cause. More replicas help if capacity is low. They do not help if every request waits on the same slow database query or if clients are sending huge prompts.
-
-## 11.2 Batching Collapse
-
-Batching collapse happens when the serving engine stops forming efficient batches.
-
-Causes include:
-
-* traffic too low or too bursty
-* request lengths too heterogeneous
-* scheduler settings too strict
-* too many priority classes
-* excessive cancellations
-* memory pressure limiting active sequences
-
-The symptom is poor GPU utilization and worse cost per token. Sometimes latency also worsens because the system loses throughput.
-
-## 11.3 Cache Thrash
-
-Cache thrash happens when the working set is larger than the cache or keys are too unstable to hit.
-
-Symptoms include low hit rate, high eviction rate, and unpredictable latency. In LLM systems, cache thrash may affect response caches, retrieval caches, embedding caches, or prefix caches.
-
-Bad cache keys can be worse than no cache. They can serve stale, cross-user, or cross-version responses.
-
-## 11.4 OOMs
-
-Out-of-memory failures often come from long sequences, too many active requests, oversized batches, model weight size, KV-cache growth, or fragmentation.
-
-Mitigations include:
-
-* prompt length limits
-* output length limits
-* smaller batches
-* quantization
-* better KV-cache paging
-* admission control
-* model sharding
-* more memory per replica
-
-OOMs should not be treated as random. They are usually a sign that memory capacity was not modeled against worst-case request shape.
-
-## 11.5 Queue Backlogs
-
-Queue backlogs mean arrival rate exceeds service rate.
-
-A backlog may be acceptable for offline jobs. It is dangerous for interactive requests. Watch age of oldest job, not just queue length. A queue of 1,000 tiny jobs may be fine. A queue with one 30-minute-old interactive request is not.
-
-Retries can make backlogs worse. So can autoscaling delays.
-
-## 11.6 Bad Rollouts
-
-Bad rollouts happen when a new model, prompt, parser, image, or routing policy breaks production.
-
-Common causes:
-
-* insufficient canarying
-* missing rollback path
-* version mismatch
-* metrics not segmented by version
-* shadow tests that did not cover real traffic
-* quality regressions hidden by aggregate metrics
-
-The solution is not "never deploy." The solution is controlled deployment with fast detection and easy rollback.
-
-## 11.7 Observability Gaps
-
-An observability gap means the system fails but the team cannot explain why.
+A self-improvement loop uses the model or system to generate training candidates, critique outputs, solve tasks, create synthetic data, or propose refinements.
 
 Examples:
 
-* latency dashboard lacks queue time
-* error dashboard lacks model version
-* cost dashboard lacks token counts
-* quality dashboard lacks route decisions
-* traces omit fallback events
+* generate multiple candidate answers and keep the one that passes tests
+* use an LLM judge to label preference pairs
+* use execution results to create verified code examples
+* ask a stronger model to critique a weaker model
+* mine failure traces and turn them into training cases
 
-Observability gaps are production risks because they increase time to recovery.
+The danger is feedback contamination. If the model generates flawed data and then trains on it without independent validation, the system can amplify its own biases and mistakes.
 
-## 11.8 Cost Explosions
+Self-improvement loops need external anchors:
 
-Cost explosions happen when a system does much more model work than expected.
+* human review
+* deterministic tests
+* trusted datasets
+* safety filters
+* held-out evaluations
+* production outcome checks
 
-Causes include:
+## 4.11 Learning Loop Operations
 
-* longer prompts
-* longer outputs
-* retries
-* agent loops
-* low cache hit rates
-* routing too much traffic to large models
-* inefficient batching
-* traffic abuse
-* logging too much high-volume data
+The algorithm is only one part of the learning loop. In deployed systems, most of the work is operational:
 
-Cost needs alerts just like latency and errors. A system can be technically healthy and financially unhealthy.
+* deciding which traces are eligible for training
+* redacting or excluding sensitive data
+* collecting labels or preferences with clear instructions
+* measuring annotator disagreement
+* sampling edge cases instead of only high-volume cases
+* converting failures into regression tests
+* promoting updates through offline evals, canaries, and rollback plans
 
----
+A mature loop usually has separate ownership for data policy, labeling quality, training, evaluation, deployment, and incident response. If those responsibilities are blurred, a "learning" system can quietly absorb noisy feedback, private content, or product incentives that conflict with correctness.
 
-# 12. What to Say in an Interview
-
-When asked to design a production ML serving system, start with the workload.
-
-Say:
-
-> I would first clarify whether this is synchronous or asynchronous, the latency target, expected request rate, prompt and output length distribution, quality requirements, cost constraints, and failure policy.
-
-Then decompose the serving path:
-
-> I would put an API layer in front of a router, use cache where correctness allows it, queue or batch requests depending on latency tolerance, serve the model through an inference engine such as vLLM or TGI, and instrument the path with metrics, logs, and traces.
-
-Then explain the key tradeoff:
-
-> The main tension is latency versus throughput versus cost. Larger batches improve GPU utilization but increase queueing. Smaller models reduce latency and cost but may reduce quality. Caches reduce cost and latency but introduce invalidation and correctness risks.
-
-Then cover reliability:
-
-> I would use timeouts, bounded retries, circuit breakers, admission control, fallback models, canary rollouts, and clear rollback. I would track model version, prompt version, token counts, queue time, cache hit rate, fallback rate, and latency percentiles.
-
-Then name failure modes:
-
-> I would watch for latency spikes, queue backlogs, KV-cache memory pressure, OOMs, batching collapse, bad rollouts, observability gaps, and cost explosions.
-
-This structure signals that you can reason across model behavior, infrastructure, and product constraints.
+The economic question matters too. Some improvements are cheaper as prompt changes, retrieval fixes, tool validation, or model routing. Post-training is worth the cost when the desired behavior is broad, repeated, and hard to enforce at runtime.
 
 ---
 
-# 13. Takeaways
+# 5. Common Technologies and Patterns
 
-Production ML systems are controlled serving systems around expensive learned functions.
+## Reward Models
 
-The model is important, but production behavior comes from the whole path:
+Reward models are usually transformer-based classifiers or regressors trained over prompt-response pairs. They may produce a scalar quality score, safety score, helpfulness score, or domain-specific score.
 
-* routing decides which model handles work
-* queues and batchers decide how efficiently hardware is used
-* caches decide what work can be skipped
-* workers execute bounded units of computation
-* timeouts, retries, and circuit breakers decide how failures propagate
-* observability decides whether humans can debug the system
-* deployment controls decide whether change is safe
+In production, reward models are often used for:
 
-The central tradeoff is:
+* training signal in RLHF
+* offline ranking of candidate responses
+* rejection sampling
+* safety scoring
+* evaluation dashboards
+
+## Preference Datasets
+
+Preference datasets contain examples of chosen and rejected outputs.
+
+Useful fields include:
+
+* prompt
+* chosen response
+* rejected response
+* label source
+* labeler agreement
+* task category
+* safety category
+* model versions that produced candidates
+* timestamp and sampling settings
+
+Metadata matters because preference data ages. A preference from an old policy, old UI, or old safety policy may not match the current product.
+
+## RL Training Loops
+
+An RL training loop typically has:
+
+* rollout generation
+* reward scoring
+* advantage estimation
+* policy update
+* reference-policy regularization
+* evaluation
+* checkpointing
+
+For LLMs, these loops are expensive because rollouts are token-heavy and model updates require large GPU workloads. That is why teams often use offline preference optimization, rejection sampling, or smaller rerankers before full RL.
+
+## Reference-Guided Learning Patterns
+
+Reference-guided learning is the broad family where the current learner is trained against a frozen, delayed, smoothed, privileged, or filtered signal.
+
+Common patterns:
+
+| Pattern | Reference Role | Typical Examples |
+| ------- | -------------- | ---------------- |
+| Bootstrap target | produces stable targets for a bootstrapped prediction | DQN target network, SAC target Q network |
+| Behavioral anchor | limits how far the policy can move | PPO old policy, RLHF reference model, DPO reference policy |
+| Teacher | transfers richer behavior or softer labels | knowledge distillation, policy distillation, ensemble distillation |
+| Momentum teacher | smooths the current learner over time | BYOL, DINO, MoCo-style momentum encoders, Mean Teacher |
+| Privileged teacher | sees extra context, hints, or corrections | OPSD, RMSD |
+| Filter or judge | decides which token/action differences matter | RMSD relevance mask, pseudo-label confidence filtering |
+
+This pattern should be described as a composition of objective design, constraints, credit assignment, and update cadence. The reference is not automatically "better." Sometimes it is better informed. Sometimes it is merely slower, which is enough to stabilize the target.
+
+## Offline and Online Bandits
+
+Bandits handle decisions where actions produce observable reward but full long-horizon RL is unnecessary.
+
+Examples:
+
+* choosing which prompt template to use
+* choosing among model variants
+* selecting a ranking strategy
+* routing traffic between answer styles
+* choosing retrieval depth
+
+Offline bandit evaluation tries to estimate policy performance from logged data. Online bandits allocate live traffic while balancing exploration and exploitation.
+
+## Trajectory Logging
+
+Trajectory logging is the instrumentation layer that makes learning possible.
+
+Without logs, feedback cannot be attributed. You need the prompt, context, model version, output, tool calls, latency, filters, user action, and outcome. This is also the bridge from Chapter 4 evaluation to Chapter 5 learning: eval cases often come from logged failures.
+
+## Rejection Sampling and Reranking
+
+Rejection sampling generates multiple candidates, scores them, and keeps the best acceptable one.
+
+Reranking is similar: generate or retrieve candidates, score them with a model or heuristic, and return the top result.
+
+These patterns improve behavior without changing policy weights. They are often cheaper and safer than immediate retraining, but they add inference cost and depend on scorer quality.
+
+## Post-Training Pipelines
+
+A mature post-training pipeline includes:
+
+* data ingestion
+* cleaning and deduplication
+* labeling
+* dataset versioning
+* training
+* offline evaluation
+* safety evaluation
+* red-team testing
+* staged rollout
+* monitoring
+* rollback
+
+This is software engineering around optimization. The model update is only one step.
+
+---
+
+# 6. Implementation Details
+
+## 6.1 Data Collection
+
+Collect the full decision context, not just the final answer.
+
+For an LLM product, useful records include:
+
+* user request after privacy filtering
+* retrieved documents or tool observations
+* prompt template version
+* model and checkpoint version
+* sampling parameters
+* candidate outputs
+* final selected output
+* validation results
+* user feedback
+* downstream outcome
+* safety filter results
+
+Data collection must also handle privacy, retention, consent, and security. A training pipeline that leaks sensitive user data into future models is a production incident, not a model improvement.
+
+## 6.2 Preference Labeling
+
+Preference labels are easier to collect than perfect demonstrations, but they are not free.
+
+Good labeling workflows define:
+
+* what "better" means
+* how to handle factuality vs helpfulness vs tone
+* when safety overrides user preference
+* how to break ties
+* how to measure labeler agreement
+* how to audit label quality
+
+For high-stakes domains, labels often need expert review. For low-stakes domains, crowd labels or LLM-assisted labels may be acceptable if validated against trusted samples.
+
+## 6.3 Reward Estimation
+
+Reward can come from:
+
+* direct environment outcome
+* human labels
+* learned reward model
+* deterministic verifier
+* heuristic score
+* LLM judge
+* blended score
+
+The safest systems avoid pretending that one reward captures everything. They often maintain separate scores for helpfulness, correctness, safety, policy compliance, latency, and user satisfaction. The update gate can then require that no critical dimension regresses.
+
+## 6.4 Gated Policy Updates
+
+A gated update process asks:
 
 ```text
-latency, throughput, cost, quality, and reliability cannot all be maximized at once
+Should this candidate policy be allowed to change production behavior?
 ```
 
-Strong engineers make the tradeoff explicit, measure it, and design failure behavior before production traffic finds the weak point.
+Useful gates:
+
+* offline benchmark improvement
+* no regression on critical tasks
+* safety eval pass
+* privacy and compliance checks
+* human review for risky behavior changes
+* canary success
+* rollback readiness
+
+The update should be reversible. In production, the ability to roll back a model or route traffic away from a bad policy is part of the learning system.
+
+## 6.5 Safety Maintenance
+
+Safety is not a one-time filter. It must be maintained across updates.
+
+Policy updates can accidentally weaken refusals, increase confident hallucinations, leak private information, or make unsafe tool calls. A post-training pipeline needs safety datasets, adversarial tests, red-team prompts, policy-specific evaluations, and monitoring for novel failures.
+
+The key rule:
+
+```text
+Never let a quality reward silently override safety constraints.
+```
+
+## 6.6 Continual-Learning Risks
+
+Continual learning can go wrong when recent data dominates older invariants.
+
+Examples:
+
+* a support bot learns from angry users and becomes overly apologetic
+* a coding assistant overfits to one team's style and regresses general Python ability
+* a retrieval system promotes popular but outdated documents
+* an agent learns shortcuts that pass shallow tests but fail real tasks
+* a model absorbs private or low-quality user text
+
+The fix is not to avoid learning. The fix is to make updates explicit, measured, versioned, and gated.
 
 ---
 
-# 14. What Comes Next
+# 7. Tradeoffs
 
-Chapter 6 focused on serving learned systems reliably.
+## 7.1 Latency
 
-Chapter 7 moves one level up: full system design.
+Learning loops can improve future quality but add current latency.
 
-Once you understand inference services, queues, routers, caches, fallbacks, observability, and rollout controls, you can compose them into larger product architectures: search assistants, agent platforms, recommendation systems, document intelligence systems, copilots, and enterprise AI workflows.
+Reranking, rejection sampling, reward scoring, and multi-candidate generation all require extra inference. Online bandits may add routing complexity. Full RL does not usually affect request latency directly during training, but the resulting policy may be larger, slower, or require additional safety checks.
 
-The bridge is:
+## 7.2 Cost
+
+Costs come from:
+
+* human labeling
+* rollout generation
+* reward model training
+* policy training
+* evaluation suites
+* storage for trajectories
+* serving extra candidates or scorers
+
+Preference optimization is often chosen because it can be cheaper and simpler than full online RL. Reranking is often chosen because it improves behavior without changing weights, but it increases per-request inference cost.
+
+## 7.3 Reliability
+
+Static models are easier to reason about than models that change. Every update creates regression risk.
+
+Learning systems need versioning, reproducibility, eval gates, rollback, and monitoring. Without those, "the model is learning" becomes an explanation for unpredictable behavior rather than a controlled improvement mechanism.
+
+## 7.4 Correctness
+
+User preference is not the same as correctness. People may prefer confident, fluent, or agreeable answers even when they are wrong.
+
+For correctness-sensitive tasks, preference signal should be combined with ground-truth checks, retrieval grounding, tests, expert review, or deterministic verifiers.
+
+## 7.5 Scaling
+
+At small scale, manually inspecting bad outputs and fine-tuning occasionally may work. At large scale, teams need automated logging, dataset pipelines, labeling operations, training jobs, eval dashboards, canaries, and rollback infrastructure.
+
+The organizational complexity can exceed the modeling complexity.
+
+## 7.6 Operational Complexity
+
+Learning loops create dependencies across product, data, ML, infra, safety, legal, and support teams.
+
+You need clear ownership for:
+
+* what data can be used
+* what labels mean
+* what metrics decide promotion
+* who approves risky updates
+* how incidents are handled
+* how users can opt out where required
+
+---
+
+# 8. Failure Modes
+
+## 8.1 Reward Hacking
+
+Reward hacking happens when the policy finds behavior that maximizes reward without satisfying the real goal.
+
+Examples:
+
+* writing verbose answers because the reward model associates length with quality
+* adding citations that look real but are not grounded
+* refusing too often because refusals avoid unsafe mistakes
+* optimizing for clicks with misleading titles
+* passing shallow tests while hiding deeper errors
+
+The fix is better reward design, adversarial evaluation, multiple metrics, human audits, and conservative update gates.
+
+## 8.2 Misgeneralized Preferences
+
+A model can learn the wrong abstraction from preference data.
+
+If labelers prefer polite responses, the model may overgeneralize into excessive flattery. If labelers prefer confident answers, the model may become more confidently wrong. If labels reward concise answers, the model may omit necessary caveats.
+
+This is Chapter 0 generalization under a preference-shaped objective. The model learns patterns that reduce training loss, not necessarily the human concept you intended.
+
+## 8.3 Catastrophic Forgetting
+
+Catastrophic forgetting occurs when new training damages old capabilities.
+
+A model fine-tuned on customer support transcripts might become better at support tone but worse at reasoning. A domain-specific update might improve one product area and degrade safety refusals elsewhere.
+
+Mitigations include replay data, broad eval suites, regularization, adapters, frozen layers, and staged rollout.
+
+## 8.4 Distribution Drift
+
+The world changes, users change, products change, and the model itself changes which data gets observed.
+
+A reward model trained on old outputs may not score new outputs correctly. A preference dataset from one user segment may not generalize to another. A policy optimized under one UI may fail under a redesigned UI.
+
+Learning loops need drift monitoring and periodic revalidation.
+
+## 8.5 Style Over Substance
+
+Preference optimization often rewards surface features:
+
+* confident tone
+* helpful phrasing
+* clean formatting
+* apparent reasoning
+* pleasing brevity
+
+These features are not bad, but they can crowd out truth, depth, and calibrated uncertainty. A model can become more satisfying while becoming less correct.
+
+## 8.6 Feedback Loops from Bad Data
+
+If the system trains on biased, spammy, adversarial, or model-generated data, the next policy may produce more of the same.
+
+Examples:
+
+* a recommender learns from clickbait clicks and shows more clickbait
+* an assistant learns from unverified thumbs-up feedback
+* a code model trains on generated code that only appears correct
+* an agent learns from traces where bad tool calls were not labeled
+
+The defense is data filtering, source weighting, held-out trusted evals, and explicit review of data entering training.
+
+## 8.7 Reference-Guided Learning Failures
+
+Slow or frozen references reduce some instability, but they introduce their own failure modes.
+
+Common failures:
+
+* **stale teacher:** the reference caps progress because it no longer represents the best available behavior,
+* **overactive teacher refresh:** updating the reference too frequently removes the timescale separation and can cause collapse,
+* **confirmation bias:** self-distillation can amplify the learner's existing blind spots,
+* **irrelevant disagreement:** teacher and student differ on style, punctuation, or discourse markers instead of the target behavior,
+* **over-constraint:** KL or reference anchoring is too strong, so the policy cannot learn the new behavior,
+* **under-constraint:** the anchor is too weak, so the policy drifts or exploits the reward model,
+* **bad masking:** RMSD-style filters miss relevant tokens or select fluent but irrelevant tokens,
+* **teacher bias transfer:** large-to-small distillation transfers the teacher's mistakes along with its capabilities,
+* **target lag mismatch:** target networks updated too slowly delay learning, while targets updated too quickly destabilize bootstrapping.
+
+The operational fix is to evaluate both the target behavior and the preserved behavior. A reference-guided update is not successful just because the student matches the teacher.
+
+---
+
+# 9. What to Say in an Interview
+
+For a learning-loop question, start with the objective and feedback source:
 
 ```text
-deployment becomes full system design
+I would first define what behavior we want, what feedback can measure it, and how trustworthy that feedback is.
 ```
+
+Then separate the options:
+
+* Use SFT when you have demonstrations of desired behavior.
+* Use preference optimization when ranking outputs is easier than writing ideal outputs.
+* Use RLHF when you need to optimize against a learned reward signal and can afford the complexity.
+* Use bandits when choosing among actions or variants with measurable online reward.
+* Use continual learning only with strong regression and safety gates.
+
+Then explain the safety layer:
+
+```text
+I would not let raw user feedback update the model directly. I would log trajectories, clean and label data, train or score candidates offline, run evals, gate updates, canary, monitor, and keep rollback available.
+```
+
+High-signal phrases:
+
+* "Reward is a proxy, so I would design against reward hacking."
+* "Preference data shapes behavior but can overfit to style."
+* "The current policy controls the data distribution, so the loop can bias itself."
+* "I would treat model updates like production releases."
+* "Continual learning needs replay or regression coverage to avoid forgetting."
+
+---
+
+# 10. Takeaways
+
+Learning loops convert feedback into future behavior.
+
+The core primitives are reward, policy, value, advantage, feedback, exploration, and trajectory data. They compose into a loop where behavior creates data, data creates signal, signal creates updates, and updates create new behavior.
+
+The engineering challenge is controlling that loop. Good systems collect rich trajectories, separate raw feedback from trusted reward, use preference or reward modeling carefully, gate policy updates, maintain safety, and monitor drift.
+
+The Chapter 0 lesson still applies: optimization amplifies the objective. In Chapter 5, the objective may come from humans, users, tools, tests, or production outcomes. If that signal is wrong, the model does not merely make mistakes; it learns them.
+
+---
+
+# 11. Bridge to Production Serving
+
+Once a model can change, serving becomes more than inference.
+
+Production serving must answer:
+
+* which model version should receive this request?
+* how do we compare the new policy to the old one?
+* how do we canary, monitor, and roll back?
+* how do we keep latency and cost acceptable?
+* how do we prevent training data from leaking private information?
+* how do we detect regressions after deployment?
+
+Chapter 6 moves from learning loops to production ML systems: model serving, deployment, monitoring, scaling, incident response, and operating changing models reliably.
+
+[Chapter 13](../chapter_13/guide.html) adds the runtime cost of learning-loop choices. A tuned model, larger context window, longer reasoning trace, or new verifier can change prefill/decode balance, memory use, batching efficiency, and GPU count. Treat model updates like production releases that must pass both behavioral evals and serving benchmarks.

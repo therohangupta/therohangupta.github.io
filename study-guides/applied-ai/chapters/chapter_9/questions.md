@@ -1,11 +1,12 @@
 ---
 layout: page
-title: "Software Engineering Fundamentals Practice Questions"
+title: "Chapter 9 Questions: AI System Design"
 guide_type: questions
 ---
+
 # Chapter 9 — Practice Questions
 
-Explanatory material for this chapter lives in [`guide.md`](guide.html).
+Explanatory material for this chapter lives in `guide.md`.
 
 ---
 
@@ -15,494 +16,465 @@ Explanatory material for this chapter lives in [`guide.md`](guide.html).
 
 ## Question 1
 
-**How would you optimize a slow SQL query?**
+**Design an enterprise AI agent platform that lets internal teams build agents over company data and tools.**
 
 ### Sample Answer
 
-I would start by looking at the query plan rather than guessing. I would check whether the database is scanning too many rows, missing a useful index, joining in a bad order, sorting large intermediate results, or returning more columns than needed. Then I would consider adding or changing indexes, rewriting joins or filters, reducing result size, partition pruning, using materialized views, or denormalizing carefully. I would also verify with realistic data because a query that is fast on a small dev database can fail badly in production.
+I would start by separating the shared platform from individual agents. The shared platform would provide an API gateway, authentication, tenant and team isolation, an orchestration service, a model gateway, a retrieval service, a tool registry, a workflow engine, trace storage, eval infrastructure, and a human review console.
+
+Each agent would be a versioned configuration over:
+
+* prompt templates
+* allowed tools
+* retrieval sources
+* permission scopes
+* model routes
+* safety policies
+* eval suites
+* rollout flags
+
+The request path would be: client request enters the gateway, auth attaches user and tenant metadata, the orchestrator loads the agent configuration, retrieval fetches permission-filtered context, the model gateway calls the selected model, proposed tool calls are authorized by a policy engine, workers execute approved actions, and traces plus feedback are stored.
+
+The main architectural reasoning is that agent builders should not reimplement auth, tracing, tool permissions, or evals. The platform centralizes these controls while still letting teams customize product behavior.
+
+Important tradeoffs:
+
+* A generic platform improves reuse but can slow product-specific iteration.
+* Centralized tool governance improves safety but creates approval overhead.
+* Shared retrieval infrastructure reduces operational burden but requires strong tenant and document-level isolation.
+* Model routing saves cost but needs evals to prevent hard tasks from going to weak models.
+
+The biggest risks are permission leaks, unsafe tool execution, unclear ownership, and silent regressions across many agents. I would mitigate them with permission-aware retrieval, tool risk levels, prompt/version management, per-agent dashboards, offline eval gates, canary rollout, and kill switches for write tools.
 
 ---
 
 ## Question 2
 
-**What is the difference between OLTP and OLAP?**
+**Design a coding assistant that can answer questions about a repository, edit files, and run tests.**
 
 ### Sample Answer
 
-OLTP systems are optimized for many small transactional reads and writes, such as user actions, orders, or account updates. They care about low latency, consistency, and concurrency. OLAP systems are optimized for analytical queries over large datasets, such as dashboards, aggregations, and model training data exploration. They care about scan efficiency, columnar storage, compression, and large joins. Mixing the two without care can cause analytical workloads to slow down user-facing transactions.
+I would design it as a stateful developer workflow system rather than a simple chat wrapper. The main components would be an editor client, API gateway or local agent runtime, repository indexer, context builder, model gateway, patch generator, sandboxed command runner, trace store, and eval pipeline.
+
+The repository indexer would build searchable representations of files, symbols, imports, diagnostics, recent edits, git history, and test metadata. The context builder would select relevant files and snippets based on the current cursor, user request, recently viewed files, search results, linter diagnostics, and prior tool output.
+
+For edits, I would prefer patch-based changes with small diffs. For command execution, I would use a sandbox with allowlists, timeouts, and clear user approval for risky commands. The assistant should store the prompt version, selected context, generated diff, commands run, command output, and final status.
+
+The request lifecycle:
+
+1. User asks for a change.
+2. System classifies the task as explanation, edit, debug, or command.
+3. Context builder retrieves relevant code.
+4. Model proposes a plan or patch.
+5. Patch is applied and diagnostics are checked.
+6. Tests or targeted commands run if appropriate.
+7. Trace and outcome are stored.
+
+The main tradeoff is context depth versus latency. Full-repo context is expensive and noisy; narrow context may miss important dependencies. I would use layered retrieval: open files and recent edits first, symbol search second, broader semantic search only when needed.
+
+Evaluation should include compile/test pass rate, task completion, edit minimality, user acceptance, unsafe command rate, and regression cases from previous failures.
 
 ---
 
 ## Question 3
 
-**Explain database sharding.**
+**Design a customer support automation system that answers tickets and can perform limited account actions.**
 
 ### Sample Answer
 
-Sharding splits a dataset across multiple database instances or partitions, usually by a shard key such as tenant ID, user ID, or region. It increases write capacity and storage capacity because no single database owns all data. The tradeoff is complexity: cross-shard queries, transactions, rebalancing, hot shards, and operational debugging become harder. A good shard key spreads load evenly while preserving common access patterns.
+I would separate answering from acting. The system can draft grounded replies and recommend actions, but deterministic policy checks and human review should gate high-impact mutations.
+
+Architecture:
+
+* ticket ingestion service
+* API gateway and auth
+* classifier for ticket type, urgency, sentiment, and risk
+* retrieval over help center articles, policy docs, account metadata, and prior cases
+* context builder with citations and freshness metadata
+* model gateway for answer drafting
+* policy engine for action authorization
+* workflow engine for account actions
+* human review queue
+* trace, feedback, and eval storage
+
+For a refund request, the system would retrieve order data, refund policy, prior contact history, and account risk signals. The model would produce a recommended answer and action. The policy engine would check amount thresholds, eligibility, user permissions, duplicate refunds, and whether human approval is required. Only approved actions would execute.
+
+Metrics should include resolution rate, time to first response, escalation rate, reopen rate, customer satisfaction, human edit distance, policy violation rate, tool failure rate, and cost per resolved ticket.
+
+The biggest failure modes are stale policy retrieval, hallucinated promises, unsafe refunds, and over-automation of angry or legally sensitive tickets. I would mitigate these with citation validation, policy versioning, confidence thresholds, human review, action audit logs, and sampled QA.
 
 ---
 
 ## Question 4
 
-**What causes deadlocks and how do you prevent them?**
+**Design a research copilot that searches sources, synthesizes findings, and cites claims.**
 
 ### Sample Answer
 
-Deadlocks happen when two or more transactions hold locks while waiting for locks held by each other, so none can proceed. They often come from inconsistent lock ordering, long transactions, broad updates, or high concurrency on shared rows. Prevention includes keeping transactions short, acquiring locks in a consistent order, indexing filters so fewer rows are locked, lowering isolation when safe, using retries for deadlock errors, and designing workflows to avoid unnecessary shared mutable state.
+I would design around provenance. The system should make it easy to inspect which source supports each claim.
+
+The architecture would include source connectors, ingestion workers, document parsers, an object store for raw documents, a metadata store, vector and keyword indexes, reranking, context assembly, a model gateway, citation validation, and feedback capture.
+
+The request lifecycle:
+
+1. User asks a research question.
+2. System decomposes the question into search intents.
+3. Search retrieves candidate sources.
+4. Reranker prioritizes sources by relevance, freshness, authority, and diversity.
+5. Context builder extracts evidence snippets with source IDs.
+6. Model synthesizes an answer with claim-level citations.
+7. Validator checks that cited sources were retrieved and that unsupported claims are reduced or flagged.
+8. User feedback on sources and answer quality is stored.
+
+The tradeoff is breadth versus faithfulness. Broad search improves recall but increases noise and latency. Narrow search improves precision but may miss important counterevidence. I would support iterative exploration where the user can inspect sources, ask follow-up questions, and request deeper search.
+
+Evaluation should include citation accuracy, claim support, source relevance, coverage of counterarguments, answer helpfulness, and latency.
 
 ---
 
 ## Question 5
 
-**What are materialized views?**
+**Design a workflow automation agent that updates CRM records, sends emails, and creates follow-up tasks.**
 
 ### Sample Answer
 
-A materialized view stores the result of a query instead of recomputing it every time. It is useful for expensive aggregations, joins, or dashboard queries that are read often and can tolerate some freshness delay. The tradeoff is that the materialized view must be refreshed, which introduces storage cost, refresh complexity, and possible staleness. In ML systems, materialized views can make feature generation or monitoring queries much cheaper if freshness requirements are clear.
+I would use a durable workflow engine rather than a single autonomous prompt loop. The model can interpret unstructured input and recommend next steps, but the workflow engine should own state transitions, retries, idempotency, and approval gates.
+
+Architecture:
+
+* trigger ingestion from email, webhook, or UI
+* classifier for workflow type
+* orchestrator
+* durable workflow engine
+* tool registry for CRM, email, calendar, and task systems
+* policy engine
+* human approval queue
+* relational database for workflow state
+* event queue for asynchronous steps
+* tracing and eval pipeline
+
+State should include workflow ID, current step, completed steps, pending approvals, retry counts, tool outputs, idempotency keys, and final status.
+
+For sending an email, the model may draft the content. Deterministic code should verify recipient domain, template constraints, user permissions, and whether approval is required. The send action should use an idempotency key so retries do not send duplicates.
+
+The biggest tradeoff is flexibility versus reliability. A free-form agent can handle surprising tasks but is hard to validate. A state-machine workflow is more reliable but less flexible. I would start with explicit workflows for common high-value processes and use the model inside bounded steps.
 
 ---
 
 ## Question 6
 
-**Explain CAP theorem.**
+**How would you design memory and retrieval for an internal knowledge assistant with strict permissions?**
 
 ### Sample Answer
 
-CAP theorem says that under a network partition, a distributed system must choose between consistency and availability. Consistency means clients see a coherent, up-to-date view of data. Availability means every request receives a non-error response. Partition tolerance is unavoidable in distributed systems because networks fail. The practical lesson is not "pick two forever"; it is to decide what each part of the system should do during partitions, especially for user-visible writes, analytics, queues, and caches.
+I would enforce permissions before the model sees content. The retrieval layer should filter documents by user, group, tenant, document ACLs, and possibly purpose of access.
+
+Storage would be split:
+
+* relational DB for users, groups, permissions, document metadata, and feedback
+* object store for raw documents
+* vector index for semantic chunks with document IDs and ACL metadata
+* keyword index for exact matching
+* cache for hot metadata and frequent retrieval results
+
+The ingestion pipeline would parse documents, chunk them, compute embeddings, attach source metadata, owner, freshness, and ACLs, then write to indexes. When a user asks a question, retrieval should apply ACL filters before returning chunks. The context builder should preserve citations and document freshness.
+
+For conflicting documents, the system should prefer authoritative and recent sources, flag conflicts, and expose source ownership. For sensitive categories, it should escalate or refuse rather than answer from ambiguous context.
+
+Failure modes include permission leakage, stale docs, contradictory answers, and prompt injection hidden inside retrieved documents. Mitigations include ACL-filtered retrieval, document trust scores, instruction/data separation, freshness metadata, doc-owner feedback, and audit logging.
 
 ---
 
 ## Question 7
 
-**What is the difference between a star schema and a snowflake schema?**
+**How would you debug a production incident where an AI assistant suddenly starts giving worse answers, but no service is down?**
 
 ### Sample Answer
 
-A star schema has a central fact table connected directly to denormalized dimension tables. It is simple and fast for analytics because queries usually need fewer joins. A snowflake schema normalizes dimensions into additional related tables, reducing duplication but increasing join complexity. Star schemas are common in warehouses and BI because they are easier for analysts and query engines. Snowflake schemas can help when dimensions are large, shared, or need stricter consistency.
+I would treat it as a silent regression and compare traces.
+
+First I would define the failing behavior: what task, which users, which time window, and which metric changed. Then I would collect bad traces and nearby good traces. For each trace, I would compare request classification, prompt version, model route, retrieval query, retrieved documents, context assembly, model output, validation results, tool calls, and final answer.
+
+I would look for the first divergence:
+
+* new prompt version
+* model provider update
+* retrieval index refresh
+* document ingestion bug
+* changed feature flag
+* tool schema change
+* policy config change
+* distribution shift in user requests
+
+Once the likely cause is found, I would create an eval case from the failure before fixing it. Then I would roll back or patch the responsible layer, canary the fix, and monitor online metrics.
+
+The key reasoning is that AI failures often do not throw exceptions. Observability must preserve enough execution context to reconstruct what changed.
 
 ---
 
 ## Question 8
 
-**How would you design a data pipeline for ML systems?**
+**How would you prevent cost blowups in a multi-agent system?**
 
 ### Sample Answer
 
-I would define the source data, freshness requirements, schema contracts, feature transformations, labels, validation checks, storage layers, and consumers. A typical pipeline ingests raw events, validates and versions schemas, writes immutable raw data, transforms it into features or training examples, checks quality, and publishes datasets to a feature store, warehouse, or model-training job. I would track lineage, backfills, late-arriving data, privacy filters, and training-serving skew. The pipeline should fail loudly when data quality breaks rather than silently training or serving on corrupted inputs.
+I would budget the system at multiple levels: per request, per user, per tenant, per workflow, and per tool loop.
+
+Controls:
+
+* model routing based on task complexity
+* small models for classification and routing
+* prompt and context token budgets
+* maximum agent iterations
+* maximum tool calls
+* retrieval result limits
+* retry budgets
+* cache for repeated context and retrieval
+* async batch jobs where latency is not critical
+* per-tenant quotas and alerts
+* circuit breakers when spend spikes
+
+I would measure cost per successful task, not just cost per request. A cheap answer that causes human rework may be more expensive than a stronger model call.
+
+The architecture should expose token usage, model cost, tool cost, retry counts, and latency by stage. Without stage-level metrics, cost optimization becomes guesswork.
+
+The tradeoff is that aggressive cost controls can reduce quality. I would protect high-risk workflows with stronger models and verification while optimizing low-risk high-volume paths.
 
 ---
 
 ## Question 9
 
-**What are partitioning and indexing strategies?**
+**How would you design rollout and rollback for prompt, model, retrieval, and tool changes?**
 
 ### Sample Answer
 
-Partitioning physically splits data so queries can scan only relevant subsets, often by time, tenant, region, or hash. Indexing creates data structures that make lookups, filters, joins, or sorting faster. Good strategies follow access patterns: time-series analytics often partitions by date, multi-tenant systems may partition or index by tenant, and exact lookups need indexes on identifiers. The tradeoff is write overhead, storage cost, and operational complexity. Too many indexes can slow writes; poor partition keys can create hot partitions.
+I would version each layer independently.
+
+Prompts should have stable IDs, owners, changelogs, eval results, and rollout status. Models should be routed through a model gateway so traffic can shift by percentage, tenant, user group, task type, or feature flag. Retrieval configs should be versioned, including embedding model, chunking strategy, index snapshot, reranker, and filters. Tool schemas and policies should also be versioned because prompt behavior depends on tool interfaces.
+
+Rollout process:
+
+1. Run offline evals against relevant regression suites.
+2. Run shadow mode if possible.
+3. Canary to internal users or a small tenant slice.
+4. Monitor quality, safety, latency, and cost metrics.
+5. Expand gradually.
+6. Roll back the changed layer if regressions appear.
+
+Rollback should not require redeploying the whole application. For example, a bad prompt should be rolled back through prompt config, not a code revert. A bad model route should be changed at the gateway. A bad retrieval index should fall back to the previous snapshot.
+
+The risk is interaction effects: a new prompt may work with one tool schema but fail with another. That is why evals need to test realistic full workflows, not isolated prompts only.
 
 ---
 
 ## Question 10
 
-**How would you process streaming data in real time?**
+**How would you design safety and permissions for an agent that can use internal tools and external APIs?**
 
 ### Sample Answer
 
-I would use an event log or stream such as Kafka, a stream processor, durable checkpoints, schema validation, and idempotent sinks. The system should define event-time versus processing-time semantics, windowing rules, late-event handling, retry behavior, and dead-letter queues. For ML systems, streaming can update features, monitor drift, trigger alerts, or power near-real-time personalization. The hard parts are correctness under retries, backpressure, ordering, schema evolution, and making sure real-time features match training-time definitions.
+I would not rely on prompt instructions as the permission boundary. Safety should be enforced by the application, policy engine, retrieval layer, and tool execution layer.
+
+Design:
+
+* authenticate user and tenant at ingress
+* map user to scopes and roles
+* filter retrieval by ACL before model exposure
+* register tools with risk levels and required scopes
+* validate tool arguments against schema and business rules
+* require human approval for high-impact or irreversible actions
+* use idempotency keys for side effects
+* log every decision and action
+* provide kill switches for write tools
+
+Tool risk should determine execution mode:
+
+* read-only tools can often execute directly with rate limits
+* draft tools can produce artifacts for review
+* write tools need policy checks
+* high-risk write tools need approval or deterministic execution only
+
+The core principle is least privilege. The agent should only see data and tools needed for the current task, and only for the current user context.
 
 ---
 
 ## Question 11
 
-**How does Python memory management work?**
+**Design monitoring and observability for a production AI platform.**
 
 ### Sample Answer
 
-Python primarily manages memory through reference counting: objects are freed when their reference count drops to zero. CPython also has a cyclic garbage collector to clean up reference cycles that reference counting alone cannot free. Under the hood, Python uses private memory allocators and arenas for small objects. In production, memory may not immediately return to the operating system even after objects are freed, so engineers need to distinguish live object growth from allocator behavior.
+I would combine standard service observability with AI-specific traces.
+
+Standard metrics:
+
+* request volume
+* error rate
+* latency percentiles
+* dependency health
+* queue depth
+* worker failures
+
+AI-specific metrics:
+
+* token usage
+* model cost
+* prompt version distribution
+* model route distribution
+* retrieval hit rate
+* reranker score distribution
+* tool-call success rate
+* validation failure rate
+* human override rate
+* escalation rate
+* task success
+* safety incidents
+
+A trace should connect the user request, classification, prompt version, model version, retrieved document IDs, assembled context or redacted context, tool calls, validation results, final answer, and feedback.
+
+For debugging, I would support trace comparison between good and bad examples. For privacy, I would redact sensitive values, restrict trace access, and set retention policies.
+
+The main tradeoff is debuggability versus privacy. The system needs enough information to explain behavior without storing unnecessary sensitive content forever.
 
 ---
 
 ## Question 12
 
-**Explain reference counting and garbage collection.**
+**You are designing an AI system for a high-stakes domain where wrong answers are costly. How does your architecture change?**
 
 ### Sample Answer
 
-Reference counting tracks how many references point to an object. When the count reaches zero, CPython can deallocate the object immediately. Garbage collection handles cycles, such as two objects that reference each other even though nothing else can reach them. Reference counting gives predictable cleanup for many objects, but cycles require periodic GC work. Finalizers, global references, caches, and closures can make object lifetime less obvious.
+I would reduce autonomy, increase verification, and make uncertainty visible.
+
+Changes:
+
+* stronger identity and permission checks
+* authoritative retrieval sources only
+* stricter context construction
+* lower tolerance for unsupported claims
+* structured outputs with uncertainty and citations
+* deterministic validation
+* human review for ambiguous or high-impact cases
+* conservative fallback behavior
+* stronger audit logging
+* slower rollout
+* larger offline eval suites
+* incident review process
+
+The model should often draft or recommend rather than execute. If actions are allowed, they should be reversible where possible and gated by policy.
+
+The tradeoff is slower user experience and higher cost. That is acceptable when the cost of wrong automation is high. In interviews, I would explicitly tie autonomy level to reversibility, impact, and observability.
 
 ---
 
 ## Question 13
 
-**What is async programming and when should you use it?**
+**How would you choose between building a general AI agent platform and building one product-specific agent?**
 
 ### Sample Answer
 
-Async programming lets a program handle many concurrent IO-bound tasks without blocking a thread per task. In Python, `asyncio` uses an event loop where coroutines yield control while waiting for network, disk, database, or API responses. It is useful for high-concurrency services that spend much of their time waiting on IO, such as API gateways, retrieval services, or orchestration layers. It is not a magic speedup for CPU-bound work; CPU-heavy tasks need processes, native extensions, or separate workers.
+I would start from the workflows and ask how much is genuinely shared.
+
+A general platform is justified when multiple teams need the same primitives: auth, tool registry, retrieval, model gateway, tracing, evals, prompt management, human review, and rollout controls. It reduces duplication and improves governance.
+
+A product-specific agent is better when the workflow has unique UX, domain logic, latency requirements, or safety constraints. It can be optimized more aggressively and evaluated more directly.
+
+The risk of a platform is premature abstraction. Teams may spend months building generic agent infrastructure before proving any workflow creates value. The risk of product-specific agents is fragmentation: inconsistent permissions, poor observability, duplicated tool integrations, and no shared eval standards.
+
+My approach would be to build the first high-value workflow product-specifically, but factor out only the platform capabilities that become obviously repeated: model gateway, tracing, tool registry, retrieval connectors, and eval harness.
 
 ---
 
 ## Question 14
 
-**What is the difference between threading, multiprocessing, and asyncio?**
+**How would you design an eval loop for a top-layer AI product after launch?**
 
 ### Sample Answer
 
-Threading runs multiple threads in one process and is useful for IO-bound work, but in CPython only one thread executes Python bytecode at a time because of the GIL. Multiprocessing runs separate processes, bypassing the GIL for CPU-bound work at the cost of more memory and inter-process communication overhead. `asyncio` runs many coroutines on an event loop, which is efficient for IO-bound concurrency but requires non-blocking libraries. The right choice depends on whether the bottleneck is CPU, IO, memory, or external services.
+I would build a loop that connects production traces to offline and online evaluation.
+
+Production logging captures request metadata, prompt version, model version, retrieval IDs, tool calls, validations, output, and user outcomes. A sampling job selects traces for human review based on failures, high-risk categories, low confidence, user dissatisfaction, and random sampling. Reviewers label correctness, faithfulness, safety, and task completion.
+
+Those labels become:
+
+* regression test cases
+* prompt improvement data
+* retrieval ranking feedback
+* model routing data
+* policy updates
+* product UX insights
+
+Before each change, the system runs offline evals. During rollout, canaries monitor online metrics. After rollout, failures are added back into the eval set.
+
+The key reasoning is that evals should evolve with production. A static benchmark quickly becomes less useful as user behavior, documents, tools, and models change.
 
 ---
 
 ## Question 15
 
-**What causes memory leaks in Python?**
+**How would your architecture change when an AI product scales from 10,000 users to 100 million users?**
 
 ### Sample Answer
 
-Python memory leaks usually come from objects that remain reachable longer than intended. Common causes include unbounded caches, global lists or dictionaries, lingering references in closures, reference cycles with finalizers, callbacks that are never deregistered, large objects kept in logs or traces, and native extension leaks. I would debug with memory profiles, heap snapshots, object growth by type, and request-level reproduction. The fix is usually to bound caches, release references, stream large data, or isolate leaking work in restartable workers.
+At 10,000 users, the main challenge is proving product quality and making the request path observable. A straightforward architecture with an API gateway, model gateway, retrieval service, database, cache, queue, and eval loop may be enough.
+
+At 100 million users, the main challenge becomes controlling blast radius and variable load. I would add regional routing, tenant or user segmentation, stricter admission control, token-aware quotas, multi-region model capacity, global traffic management, per-route autoscaling, hot-key and hot-tenant mitigation, more aggressive caching, async queues for non-interactive work, and circuit breakers around retrieval, model providers, and tools.
+
+The system also needs stronger operational controls:
+
+* per-region and per-tenant metrics,
+* progressive rollout by cohort,
+* model and prompt versioning,
+* regional fallbacks,
+* cost dashboards,
+* abuse detection,
+* incident playbooks,
+* data residency controls.
+
+The key tradeoff is that global scale improves reach but increases coordination cost. You cannot treat the product as one homogeneous service anymore. You need slices: by region, tenant, route, model, risk level, and workload type.
 
 ---
 
 ## Question 16
 
-**Explain Python's GIL in depth.**
+**How would you scale a RAG product from 10,000 documents to 100 million documents?**
 
 ### Sample Answer
 
-The Global Interpreter Lock is a CPython mutex that allows only one thread to execute Python bytecode at a time within a process. It simplifies memory management and protects interpreter internals, especially reference counting. The GIL does not prevent concurrency for IO-bound tasks because threads can release it while waiting on IO, and native extensions may release it during heavy computation. But it limits CPU-bound parallelism in pure Python threads. For CPU-heavy workloads, use multiprocessing, vectorized libraries, compiled extensions, or separate services.
+I would stop thinking of retrieval as one index and start treating it as a retrieval platform. At 10,000 documents, a simple vector index with metadata and reranking may work. At 100 million documents, I need sharded indexes, hybrid sparse+dense retrieval, query routing, strict permission filtering, bounded fanout, approximate search, compression, replicas, async ingestion, freshness policies, and per-shard observability.
+
+The request path would be:
+
+1. classify the query and construct filters,
+2. route to tenant, region, time, or semantic shards,
+3. run dense and sparse retrieval with bounded fanout,
+4. merge candidates,
+5. rerank only a manageable candidate set,
+6. construct context with citations,
+7. record index and shard versions for debugging.
+
+The main tradeoffs are recall versus latency, memory versus precision, freshness versus stability, and fanout versus coordination cost. I would tune the system against retrieval evals, not only QPS benchmarks.
 
 ---
 
 ## Question 17
 
-**How would you profile Python code performance?**
+**When a system gets slower as it scales, how do you decide what to fix first?**
 
 ### Sample Answer
 
-I would first define the performance problem: CPU time, memory growth, IO latency, database time, or end-to-end request latency. For CPU, I would use profilers such as `cProfile`, sampling profilers, or py-spy. For memory, I would use tracemalloc, heap snapshots, and object growth analysis. For services, I would add tracing around request stages, database calls, model calls, queue wait, and serialization. Profiling should use realistic inputs because microbenchmarks can miss production bottlenecks like network waits, batching, and lock contention.
-
----
-
-## Question 18
-
-**What are metaclasses?**
-
-### Sample Answer
-
-Metaclasses are the classes of classes. In Python, a class definition creates a class object, and the metaclass controls how that class object is created. They can customize class construction, registration, validation, or dynamic method creation. They are powerful but often unnecessary; decorators, base classes, or simple registries are usually easier to understand. In interviews, the key is to know the mechanism and also know when not to use it.
-
----
-
-## Question 19
-
-**How do decorators work internally?**
-
-### Sample Answer
-
-A decorator is a callable that takes a function or class and returns a replacement. The `@decorator` syntax is shorthand for assigning `func = decorator(func)`. Function decorators often wrap the original function in another function that adds behavior before or after the call. Good decorators preserve metadata with `functools.wraps`, handle arguments carefully, and avoid hiding side effects. In production systems, decorators are commonly used for retries, tracing, auth checks, caching, and registration.
-
----
-
-## Question 20
-
-**How would you build a scalable Python backend for AI inference?**
-
-### Sample Answer
-
-I would separate the API layer from the inference workers. The API layer should authenticate requests, validate inputs, enforce quotas, route work, and return streaming responses when useful. Inference workers should batch requests, manage model clients or GPU runtimes, apply timeouts, and emit metrics for tokens, latency, errors, and cost. I would use queues for asynchronous work, autoscaling based on queue depth and GPU utilization, caches where safe, and backpressure when capacity is exhausted. The design should make model, prompt, and route versions observable so regressions can be rolled back quickly.
-
----
-
-# Tech Stack Mental Model Questions
-
----
-
-## Question 21
-
-**How would you explain PyTorch vs TensorFlow vs JAX?**
-
-### Sample Answer
-
-PyTorch is best understood as eager tensor programming with an autograd tape, which makes it natural for research iteration and debugging. TensorFlow is historically graph-oriented: you define or trace computation so it can be optimized and deployed, which fits production and serving workflows. JAX is NumPy-like functional programming plus transformations such as `grad`, `jit`, `vmap`, and `pmap`, which makes it powerful for compiled high-performance research code. The choice depends on whether the workflow values dynamic debugging, graph deployment, or composable program transformations.
-
----
-
-## Question 22
-
-**Why is PyTorch dominant in many LLM research workflows?**
-
-### Sample Answer
-
-PyTorch feels close to normal Python, so researchers can inspect tensors, write custom training loops, change model code quickly, and debug failures directly. Its ecosystem also matters: Hugging Face Transformers, DeepSpeed, FSDP, custom Triton kernels, and many open-source LLM projects are PyTorch-first. The tradeoff is that large-scale training still requires careful systems work around distributed execution, memory, data loading, checkpointing, and kernel efficiency.
-
----
-
-## Question 23
-
-**What does JAX's `jit`, `grad`, and `vmap` mental model buy you?**
-
-### Sample Answer
-
-JAX treats numerical programs as functions that can be transformed. `grad` creates gradient functions, `jit` compiles functions for faster execution, and `vmap` vectorizes functions across batch dimensions. This makes it elegant to express research ideas as composable transformations. The tradeoff is that code needs to be more functional and shape-stable; dynamic Python behavior can cause recompilation or make debugging harder.
-
----
-
-## Question 24
-
-**When would you use Kubernetes vs Slurm for ML workloads?**
-
-### Sample Answer
-
-Kubernetes is usually better for service-oriented workloads: APIs, inference deployments, workers, retrieval services, and platform components that need health checks, autoscaling, and rolling deploys. Slurm is often better for HPC-style batch training jobs where researchers submit jobs needing a fixed number of nodes or GPUs. Large AI labs may use both: Kubernetes for services and Slurm-like schedulers for research training clusters.
-
----
-
-## Question 25
-
-**What role does NCCL play in distributed training?**
-
-### Sample Answer
-
-NCCL is the GPU communication library behind operations such as all-reduce, all-gather, reduce-scatter, and broadcast. In distributed training, each GPU computes local work, then workers synchronize gradients, parameters, or activations through communication collectives. If NCCL is misconfigured, slow, or hanging, GPUs can sit idle even when model code is correct. That makes networking, topology, and communication patterns central to training throughput.
-
----
-
-## Question 26
-
-**How do DeepSpeed ZeRO and PyTorch FSDP reduce memory pressure?**
-
-### Sample Answer
-
-Both reduce memory pressure by sharding model state across GPUs instead of replicating everything everywhere. DeepSpeed ZeRO shards optimizer states, gradients, and parameters depending on stage. PyTorch FSDP similarly shards parameters and gathers them only when needed for computation. The benefit is fitting larger models or batches. The cost is more communication, more complex configuration, and new failure modes around checkpointing and distributed synchronization.
-
----
-
-## Question 27
-
-**What is the difference between vLLM, TGI, Triton Inference Server, and Ray Serve?**
-
-### Sample Answer
-
-vLLM is specialized for high-throughput LLM serving, especially efficient KV-cache management and continuous batching. TGI is Hugging Face's text-generation server for serving compatible LLMs with production features. Triton Inference Server is a general multi-framework inference server for many model types and backends, not only LLMs. Ray Serve is Python-native distributed serving, useful for custom routing and multi-stage inference pipelines. The right choice depends on whether the bottleneck is LLM token throughput, standard text-generation deployment, heterogeneous model serving, or custom Python orchestration.
-
----
-
-## Question 28
-
-**How do Spark, Beam, and Dask differ as data-processing systems?**
-
-### Sample Answer
-
-Spark is a distributed batch-processing engine widely used for large joins, aggregations, and ETL. Beam is a programming model for both batch and streaming, where the same pipeline can run on different runners and has strong event-time/windowing concepts. Dask is Python-native distributed computation that feels closer to pandas, NumPy, and custom Python workflows. Spark is often strongest for large enterprise batch ETL, Beam for unified batch/stream semantics, and Dask for Python-centric parallelism.
-
----
-
-## Question 29
-
-**When would you choose FAISS, pgvector, or a managed vector database?**
-
-### Sample Answer
-
-I would choose FAISS when I want a local or custom vector index and am willing to build the service, metadata, persistence, and scaling layers myself. I would choose pgvector when the corpus is small to medium, metadata filtering is important, and the application already uses Postgres. I would choose a managed or dedicated vector database when operational scaling, APIs, namespaces, and vector-specific indexing are worth the added dependency and cost.
-
----
-
-## Question 30
-
-**How do Prometheus, Grafana, and OpenTelemetry compose?**
-
-### Sample Answer
-
-OpenTelemetry instruments code and emits traces, metrics, and logs in a standard format. Prometheus commonly stores and queries time-series metrics. Grafana visualizes metrics and logs in dashboards. Together, OpenTelemetry can produce telemetry, Prometheus can collect service metrics, and Grafana can show operational views and alerts. In AI systems, the key is to include AI-specific dimensions such as model version, prompt version, token counts, retrieval latency, tool latency, and queue wait.
-
----
-
-## Question 31
-
-**What should W&B or MLflow track in a research training run?**
-
-### Sample Answer
-
-They should track the full experiment identity: code version, config, hyperparameters, data version, model architecture, checkpoint paths, random seed, metrics, eval results, logs, artifacts, and system utilization. For LLM or RLHF work, I would also track prompt datasets, reward model versions, rollout settings, preference data versions, and evaluation slices. The point is reproducibility: another engineer should be able to understand what changed and why a run improved or regressed.
-
----
-
-## Question 32
-
-**What is the mental model for Docker and Kubernetes in AI systems?**
-
-### Sample Answer
-
-Docker packages code, dependencies, and runtime assumptions into an image. Kubernetes schedules and manages containers across machines with health checks, restarts, services, and scaling. In AI systems, Docker helps make model services, workers, and data jobs reproducible, while Kubernetes runs and manages those workloads. The hard parts are GPU scheduling, secrets, network access, image size, cold starts, observability, and resource isolation.
-
----
-
-## Question 33
-
-**Why do AI agents need sandboxing or VM isolation?**
-
-### Sample Answer
-
-Agents may run code, browse websites, manipulate files, call tools, or execute long-horizon tasks. If those actions are untrusted or model-generated, they need isolation from host credentials, files, networks, and other tenants. Sandboxes, containers, VMs, microVMs, network policies, and resource limits reduce blast radius. The mental model is: give the agent a controlled environment where actions are observable, bounded, and disposable.
-
----
-
-## Question 34
-
-**When should Python be replaced or complemented by C++, Rust, CUDA, or Triton?**
-
-### Sample Answer
-
-Python is excellent for orchestration and research iteration, but lower-level tools are needed when the bottleneck is runtime overhead, memory control, kernel performance, or systems safety. C++ is common for runtimes and high-performance services. Rust is useful for safe systems components and control planes. CUDA gives direct GPU programming control. Triton provides a Python-like way to write custom GPU kernels. The right move is not to rewrite everything; it is to move the hot or safety-critical path to the right layer.
-
----
-
-## Question 35
-
-**How would you design the stack for an RLHF training pipeline?**
-
-### Sample Answer
-
-I would start with a PyTorch or JAX policy model, a dataset/prompt source, rollout workers, a reward model or preference data pipeline, an optimizer such as PPO or DPO, distributed training infrastructure, checkpoint storage, eval harnesses, and experiment tracking. Ray or custom workers can coordinate rollouts; DeepSpeed or FSDP can reduce memory pressure; Slurm or Kubernetes can schedule jobs; W&B or MLflow can track runs; Prometheus/Grafana/OpenTelemetry can monitor throughput and failures. The main risks are rollout bottlenecks, reward bugs, training instability, checkpoint failures, and irreproducible experiments.
-
----
-
-## Question 36
-
-**How would you design the stack for a knowledge or RAG system?**
-
-### Sample Answer
-
-I would build ingestion for raw documents, parsing, chunking, metadata extraction, embedding generation, vector and sparse indexes, reranking, context assembly, generation, citation validation, and evals. FAISS, pgvector, or a vector DB can handle dense retrieval; Elasticsearch/OpenSearch can handle sparse retrieval; rerankers improve precision; metadata filters enforce permissions and freshness. The key failure modes are stale indexes, bad chunking, missing access control, poor ranking, unsupported citations, and noisy context.
-
----
-
-## Question 37
-
-**How would you design the stack for a high-throughput LLM inference service?**
-
-### Sample Answer
-
-I would use an API gateway with auth, quotas, validation, and request IDs; a router for model selection; caches where correctness allows; queues or batchers for admission control; an inference runtime such as vLLM, TGI, Triton, or Ray Serve; streaming responses; output validation; and observability across every stage. The core metrics are time to first token, time to final token, prompt tokens, output tokens, queue wait, GPU utilization, KV-cache pressure, error rate, fallback rate, and cost per successful request.
-
----
-
-## Question 38
-
-**How do data, tensor, pipeline, sequence, and expert parallelism differ?**
-
-### Sample Answer
-
-Data parallelism replicates the model and splits examples across workers. Tensor parallelism splits large layer computations across GPUs. Pipeline parallelism splits layers into stages across devices. Sequence parallelism reduces activation memory by splitting sequence-related work. Expert parallelism distributes MoE experts across devices. The right choice depends on what does not fit or what is slow: batch size, parameters, activations, sequence length, or sparse expert capacity. Each strategy trades memory and compute for communication and scheduling complexity.
-
----
-
-## Question 39
-
-**Why do checkpointing and restore tests matter in large training systems?**
-
-### Sample Answer
-
-Large training jobs fail often enough that checkpointing is part of the system design. A useful checkpoint must capture model weights, optimizer state, scheduler state, RNG state, data-loader position, config, and version metadata. For sharded training, restore logic must correctly map checkpoint shards back to ranks. Restore tests matter because an untested checkpoint may be unusable exactly when a multi-day run fails.
-
----
-
-## Question 40
-
-**What is LoRA and when would you use it?**
-
-### Sample Answer
-
-LoRA freezes the base model and trains small low-rank adapter matrices. The mental model is "frozen base weights plus small trainable adapters." It is useful when full fine-tuning is too expensive or when you want lightweight domain/task adaptation. The risks are base/adaptor mismatch, overfitting narrow data, and deployment confusion if the adapter is not tracked with the correct base model, tokenizer, and eval results.
-
----
-
-## Question 41
-
-**Why do dataset and checkpoint formats matter in AI infrastructure?**
-
-### Sample Answer
-
-Formats determine how efficiently and reliably bytes become batches or deployable artifacts. Parquet and Arrow are efficient for columnar data; JSONL is simple but inefficient at huge scale; WebDataset-style shards can work well for large multimodal datasets; `safetensors` can make model weight loading safer. Bad formats or sharding choices can bottleneck GPUs, make backfills painful, corrupt reproducibility, or make serving startup slow.
-
----
-
-## Question 42
-
-**What problem does a feature store solve?**
-
-### Sample Answer
-
-A feature store centralizes feature definitions and provides consistent offline and online access. It helps reduce training-serving skew, supports point-in-time correct training datasets, and gives serving systems low-latency feature lookup. The tradeoff is operational complexity: feature ownership, freshness, backfills, and online/offline consistency all need explicit management. For small systems, careful warehouse pipelines may be enough.
-
----
-
-## Question 43
-
-**What should a model registry track before a model is deployed?**
-
-### Sample Answer
-
-A model registry should track more than weights. It should include tokenizer, config, base model, adapters, training data version, code version, eval results, safety review, owner, deployment state, and rollback target. The registry turns an anonymous checkpoint into an auditable deployable artifact. Without this, teams cannot reliably compare, reproduce, approve, or roll back model versions.
-
----
-
-## Question 44
-
-**What CI checks are useful for ML research infrastructure?**
-
-### Sample Answer
-
-Useful checks include data transform unit tests, schema checks, shape tests, small training-loop smoke tests, checkpoint save/restore tests, deterministic eval harness tests, config validation, and launch tests for distributed jobs. The goal is to catch cheap failures before expensive GPU runs. Research code can stay flexible while still protecting the shared training and evaluation pipeline.
-
----
-
-## Question 45
-
-**What is the CUDA execution hierarchy, and why does it matter for AI workloads?**
-
-### Sample Answer
-
-CUDA work is organized as a grid of blocks, where blocks contain warps and warps contain threads. Threads execute lanes of work; warps execute in lockstep; blocks can cooperate through shared memory. This matters because GPUs are efficient when many threads run regular operations over large tensors with predictable memory access. Irregular branching, tiny kernels, bad tensor shapes, CPU-GPU transfers, and excessive synchronization can waste the hardware.
-
----
-
-## Question 46
-
-**Why can many small GPU operations be slower than one fused operation?**
-
-### Sample Answer
-
-Each GPU kernel launch has overhead, and intermediate tensors often require extra memory reads and writes. Many tiny operations can spend more time on launch overhead, synchronization, and memory movement than useful math. A fused operation does more work per launch and can keep intermediate values closer to the compute, which is why optimized kernels and compiler fusion matter for high-throughput ML systems.
-
----
-
-## Question 47
-
-**Why is one scale-up domain a natural boundary for an MoE layer?**
-
-### Sample Answer
-
-MoE routing creates all-to-all traffic: tokens on many GPUs may need to visit experts on many other GPUs, then return to be combined. Inside a scale-up domain, accelerators usually have much faster and denser interconnect. Across racks or scale-out links, bandwidth is lower and latency is higher. Keeping an expert-parallel MoE layer inside the fast domain avoids making all-to-all routing the bottleneck.
-
----
-
-## Question 48
-
-**Why does pipeline parallelism not automatically solve KV-cache memory pressure?**
-
-### Sample Answer
-
-Pipeline parallelism splits layers across stages, so it helps with model weight capacity. But to keep multiple stages busy, the system needs multiple micro-batches in flight. Splitting layers reduces the KV stored per stage, while more in-flight micro-batches increase the active sequence count. These effects can cancel, so pipeline parallelism is not a magic fix for long-context KV pressure. It also adds bubbles, scheduling complexity, and cross-stage latency.
-
----
-
-## Question 49
-
-**How can a distributed parallelism scheme slow research iteration?**
-
-### Sample Answer
-
-If the parallelism scheme assumes a specific architecture, model changes can become expensive. Pipeline boundaries may make cross-layer residual attention, alternating attention patterns, or uneven layer costs hard to implement. Expert placement may assume a fixed topology. When researchers avoid useful architecture changes because the infrastructure cannot support them, the system is constraining research instead of enabling it.
-
----
+I would identify which assumption broke. Did data stop fitting on one machine? Did one database become write-bound? Did queue age grow? Did one shard get hot? Did cross-service coordination dominate latency? Did the reranker or model become the bottleneck?
+
+Then I would use traces and per-stage metrics to locate the bottleneck:
+
+* ingress and auth,
+* database queries,
+* retrieval latency,
+* shard fanout,
+* queue wait,
+* model prefill and decode,
+* tool calls,
+* retries,
+* postprocessing.
+
+The fix depends on the bottleneck. Add indexes or partitioning for slow scans, shard or replicate for capacity, cache repeated work, move background tasks to queues, reduce fanout, batch model work, route easy requests to cheaper paths, or add circuit breakers if failures cascade. The important thing is not to add infrastructure blindly. Scale problems are specific.
